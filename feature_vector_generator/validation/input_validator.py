@@ -29,4 +29,7 @@ class InputValidator:
         if not all(isinstance(sensor_data[key], (int, float)) for key in self.required_sensor_keys):
             return False, "All sensor values must be numeric."
         
+        print(detection_data)
+        print(sensor_data)
+        
         return True, "Validation successful."

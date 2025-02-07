@@ -14,19 +14,28 @@ class VectorCombiner:
         def process_detections(detections):
             """Normalize bounding boxes and retain confidence scores. If no detections, return [0,0,0,0,0]."""
             if not detections:
-                return [[0, 0, 0, 0, 0]]  # Placeholder for "no detection"
+                return []  # Placeholder for "no detection"
             return [
-                obj["bounding_box"] + [obj["confidence"]]  # Append confidence
-                for obj in detections
+                {
+                    "bounding_box": Normalization.normalize_bounding_boxes([obj["bounding_box"]], img_width, img_height)[0],
+                    "confidence": obj["confidence"]
+                }
+                    for obj in detections
+                
             ]
 
         # Process detection data (from any source)
-        standardized_detections = process_detections(detection_data)
-        standardized_detections = Normalization.normalize_bounding_boxes(standardized_detections, img_width, img_height)
+        structured_detections = process_detections(detection_data)
+
+
+        # normalized_detections = Normalization.normalize_bounding_boxes(standardized_detections, img_width, img_height)
 
         # Standardize sensor data
         standardized_sensors = Normalization.standardize_sensor_data(sensor_data)
 
         # Flatten and concatenate
-        feature_vector = np.concatenate([np.ravel(standardized_detections), standardized_sensors])
-        return feature_vector.tolist()
+        feature_vector = {
+            "image_data": structured_detections,
+            "sensor_data": standardized_sensors
+        }
+        return feature_vector

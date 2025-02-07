@@ -6,7 +6,7 @@ class Normalization:
     def normalize_bounding_boxes(bounding_boxes, img_width, img_height):
         """Normalize bounding box coordinates and retain confidence scores."""
         return [
-            [box[0] / img_width, box[1] / img_height, box[2] / img_width, box[3] / img_height, box[4]]
+            [box[0] / img_width, box[1] / img_height, box[2] / img_width, box[3] / img_height]
             for box in bounding_boxes
         ]
 
