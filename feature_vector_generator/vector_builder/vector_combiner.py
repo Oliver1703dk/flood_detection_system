@@ -14,7 +14,10 @@ class VectorCombiner:
         def process_detections(detections):
             """Normalize bounding boxes and retain confidence scores. If no detections, return [0,0,0,0,0]."""
             if not detections:
-                return []  # Placeholder for "no detection"
+                return {
+                    "bounding_box": [0,0,0,0],
+                    "confidence": 0
+                }  # Placeholder for "no detection"
             return [
                 {
                     "bounding_box": Normalization.normalize_bounding_boxes([obj["bounding_box"]], img_width, img_height)[0],

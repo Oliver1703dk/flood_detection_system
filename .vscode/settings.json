@@ -1,0 +1,9 @@
+{
+    "python.analysis.extraPaths": [
+        "./cluster_data_receiver",
+        "./rcnn_processor/inference",
+        "./yolov8_processor/inference",
+        "./yolov8_processor/preprocessing",
+        "./yolov8_processor/postprocessing"
+    ]
+}

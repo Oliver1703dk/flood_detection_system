@@ -1,7 +1,7 @@
 import paho.mqtt.client as mqtt
 import json
-from validation.data_validator import DataValidator
-from storage.storage_manager import StorageManager
+from cluster_data_receiver.validation.data_validator import DataValidator
+from cluster_data_receiver.storage.storage_manager import StorageManager
 
 class MQTTReceiver:
     def __init__(self, broker_url, broker_port, topic, validator=None, storage_manager=None):
