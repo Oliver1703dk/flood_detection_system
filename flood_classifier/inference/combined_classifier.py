@@ -38,32 +38,29 @@ class CombinedClassifier:
         }
 
     def calculate_image_score(self, image_data, image_size):
-        """
-        Computes an image score based on detections.
-
-        Args:
-            image_data (list): List of detections, each a dict with keys:
-                "bounding_box": [x, y, width, height]
-                "confidence": float
-            image_size (tuple): (width, height) of the image.
-
-        Returns:
-            float: The image score.
-        """
         num_detections = len(image_data)
         if num_detections == 0:
             return 0
-        
+
         confidences = [d["confidence"] for d in image_data]
         avg_confidence = np.mean(confidences)
-        
-        # Compute total bounding box area and its ratio relative to the image
-        areas = [d["bounding_box"][2] * d["bounding_box"][3] for d in image_data]
+
+        areas = []
+        for d in image_data:
+            bbox = d.get("bounding_box", [])
+            # If the bbox is nested (e.g., [[x, y, w, h]]), flatten it.
+            if bbox and (isinstance(bbox[0], list) or isinstance(bbox[0], tuple)):
+                bbox = bbox[0]
+            if len(bbox) < 4:
+                continue  # Skip invalid bounding boxes.
+            areas.append(bbox[2] * bbox[3])
+
         total_area = np.sum(areas)
         image_area = image_size[0] * image_size[1]
-        area_ratio = total_area / image_area
-        
+        area_ratio = total_area / image_area if image_area != 0 else 0
+
         return num_detections * avg_confidence * area_ratio
+
 
     def calculate_sensor_adjustment(self, sensor_data):
         """

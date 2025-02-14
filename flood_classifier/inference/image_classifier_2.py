@@ -11,23 +11,34 @@ class EnhancedImageClassifier:
 
         Parameters:
         - detection_data: List of detections. Each detection should be a dict with keys:
-          "bounding_box": [x, y, width, height] and "confidence": float
+          "bounding_box": [x, y, width, height] (or nested as [[x, y, width, height]])
+          and "confidence": float.
         - image_size: Tuple (width, height) representing the dimensions of the image.
         """
         num_detections = len(detection_data)
         if num_detections == 0:
             return 0
         
+        # Compute the average confidence from detections.
         confidences = [d["confidence"] for d in detection_data]
         avg_confidence = np.mean(confidences)
         
-        # Calculate total bounding box area and relative coverage using "bounding_box"
-        areas = [d["bounding_box"][2] * d["bounding_box"][3] for d in detection_data]
+        # Calculate total bounding box area.
+        areas = []
+        for d in detection_data:
+            bbox = d.get("bounding_box", [])
+            # Check if bbox is nested (i.e., the first element is a list or tuple).
+            if bbox and (isinstance(bbox[0], list) or isinstance(bbox[0], tuple)):
+                bbox = bbox[0]
+            if len(bbox) < 4:
+                continue  # Skip if the bounding box does not have 4 elements.
+            areas.append(bbox[2] * bbox[3])
+        
         total_area = np.sum(areas)
         image_area = image_size[0] * image_size[1]
-        area_ratio = total_area / image_area
+        area_ratio = total_area / image_area if image_area != 0 else 0
         
-        # Combine features into a flood score
+        # Combine features into a flood score.
         score = num_detections * avg_confidence * area_ratio
         return score
 
@@ -40,7 +51,7 @@ class EnhancedImageClassifier:
         """
         score = self.calculate_flood_score(detection_data, image_size)
         
-        # Determine flood level based on tuned thresholds
+        # Determine flood level based on tuned thresholds.
         if score < self.threshold_low:
             return 0  # No Flood
         elif score < self.threshold_high:

@@ -4,8 +4,7 @@ import base64
 import cv2
 import numpy as np
 
-# Import the modules from your project.
-# Adjust the import paths as needed based on your project structure.
+# Import modules from your project.
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
 from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
@@ -18,23 +17,45 @@ from flood_classifier.postprocessing.classification_formatter import Classificat
 from flood_classifier.model.model_loader import ModelLoader
 from flood_classifier.inference.fusion_strategy import FusionStrategy
 from flood_classifier.inference.image_classifier import ImageClassifier
+from flood_classifier.inference.image_classifier_2 import EnhancedImageClassifier
 from flood_classifier.inference.sensor_classifier import SensorClassifier
+# Import the CombinedClassifier for one-step classification.
+from flood_classifier.inference.combined_classifier import CombinedClassifier
 
 
-def main():
-    # ---------------------------
-    # 1. Simulate Incoming Data
-    # ---------------------------
-    # Create a dummy image (a white 640x640 image) and encode it as a Base64 string.
-    dummy_image = np.ones((640, 640, 3), dtype=np.uint8) * 255  # White image
-    success, buffer = cv2.imencode('.jpg', dummy_image)
+# Import configuration
+import config
+
+
+def simulate_message():
+    """
+    Simulates an incoming data message.
+    Creates a dummy white image, encodes it to Base64,
+    and constructs a sample data dictionary.
+    """
+    
+
+    if(config.IMAGE_MODE == "test"): 
+        # Construct the test image file path.
+        test_image_path = os.path.join("test_images", "sink.jpg")
+        
+        # Read the image from disk.
+        image = cv2.imread(test_image_path)
+    else: 
+        # Create a dummy white 640x640 image.
+        image = np.ones((config.IMAGE_SIZE[1], config.IMAGE_SIZE[0], 3), dtype=np.uint8) * 255
+
+
+    # Encode the image as JPEG
+    success, buffer = cv2.imencode('.jpg', image)
     if not success:
-        print("Failed to encode dummy image.")
-        return
+        raise ValueError("Failed to encode dummy image.")
+    
+    # Convert the image to a Base64 string
     base64_image = base64.b64encode(buffer).decode('utf-8')
 
-    # Construct a sample data message matching your expected schema.
-    sample_message = {
+    # Construct sample message.
+    message = {
         "image_data": base64_image,
         "sensor_data": {
             "temperature": 25.0,
@@ -47,16 +68,33 @@ def main():
             "camera_id": "CAM123"
         }
     }
+    return message
 
-    print("\n--- Sample Message JSON ---")
-    print(json.dumps(sample_message, indent=4))
 
-    # ----------------------------------------------------
-    # 2. Validate the Data & Store It if Validation Passes
-    # ----------------------------------------------------
+def main():
+    # -------------------------------
+    # Choose Classification Mode:
+    # -------------------------------
+    # "combined" uses the CombinedClassifier.
+    # "fused" uses separate sensor & image classifiers with fusion.
+    classification_mode = config.CLASSIFICATION_MODE  # "fused" or "combined"
+
+    # -------------------------------------------
+    # 1. Simulate Incoming Data
+    # -------------------------------------------
+    try:
+        sample_message = simulate_message()
+        print("\n--- Simulated Message ---")
+        print(json.dumps(sample_message, indent=4))
+    except Exception as e:
+        print("Error simulating message:", e)
+        return
+
+    # -------------------------------------------
+    # 2. Validate and Store Data
+    # -------------------------------------------
     validator = DataValidator()
     storage_manager = StorageManager()
-
     if validator.validate(sample_message):
         storage_manager.store(sample_message)
         print("Data validated and stored successfully.")
@@ -65,70 +103,94 @@ def main():
         return
 
     # -------------------------------------------
-    # 3. Process the Image and Run YOLOv8 Inference
+    # 3. Image Preprocessing & YOLOv8 Inference
     # -------------------------------------------
-    # Preprocess the Base64-encoded image (decode, resize, normalize)
     image_processor = ImageProcessor()
-    preprocessed_image = image_processor.preprocess(sample_message["image_data"])
-    print("Image preprocessed for inference.")
+    try:
+        preprocessed_image = image_processor.preprocess(sample_message["image_data"])
+        print("Image preprocessed for inference.")
+    except Exception as e:
+        print("Error in image preprocessing:", e)
+        return
 
-    # Run YOLOv8 inference on the preprocessed image.
-    # (Make sure the YOLOv8 model file exists at the specified path.)
     try:
         inference = YOLOv8Inference()
-        # The inference method may expect an image array.
         results = inference.run_inference(preprocessed_image)
+        print("YOLOv8 inference completed.")
     except Exception as e:
-        print(f"Error during YOLOv8 inference: {e}")
+        print("Error during YOLOv8 inference:", e)
         results = None
 
-    # Format the detection results using your result formatter.
-    result_formatter = ResultFormatter(confidence_threshold=0.5)
-    if results is not None:
-        detection_results = result_formatter.format_results(results)
-    else:
-        detection_results = []
+    # Format the YOLO detection results.
+    result_formatter = ResultFormatter(confidence_threshold=0.3)
+    detection_results = result_formatter.format_results(results) if results else []
     print("\n--- YOLOv8 Detection Results ---")
     print(detection_results)
 
-    # -------------------------------------------------
-    # 4. Flood Classification via Sensor & Image Data
-    # -------------------------------------------------
-    # (A) Sensor-based Classification
-    model_loader = ModelLoader()
-    try:
-        sensor_model = model_loader.load_sensor_model()
-        sensor_classifier = SensorClassifier()
-        sensor_pred = sensor_classifier.predict(sensor_model, sample_message["sensor_data"])
-        print(f"Sensor-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded): {sensor_pred}")
-    except Exception as e:
-        print(f"Error during sensor classification: {e}")
-        sensor_pred = None
-
-    # (B) Image-based Classification using YOLO detections
-    image_classifier = ImageClassifier()
-    image_pred = image_classifier.classify_flood(detection_results)
-    print(f"Image-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded): {image_pred}")
-
-    # (C) Fuse the two predictions
-    fusion = FusionStrategy()
-    final_prediction = fusion.merge_predictions(sensor_pred, image_pred)
-
-    # Format the final classification result for display.
+    # -------------------------------------------
+    # 4. Flood Classification
+    # -------------------------------------------
     classification_formatter = ClassificationFormatter()
-    final_result = classification_formatter.format_output(final_prediction)
+
+    if classification_mode == "combined":
+        # Use the CombinedClassifier to fuse image and sensor data internally.
+        combined_classifier = CombinedClassifier(
+            image_weight=1.0, sensor_weight=1.0,
+            threshold_low=0.2, threshold_high=0.5
+        )
+        # Build an input in the expected format.
+        combined_input = {
+            "feature_vector": {
+                "image_data": detection_results,  # List of detections (each with 'bounding_box' and 'confidence').
+                "sensor_data": [
+                    sample_message["sensor_data"]["temperature"],
+                    sample_message["sensor_data"]["humidity"],
+                    sample_message["sensor_data"]["pressure"]
+                ]
+            }
+        }
+        # Note: Adjust the image_size if necessary. Here, we use (640, 640) matching our dummy image.
+        combined_pred = combined_classifier.classify(combined_input, image_size=config.IMAGE_SIZE)
+        print("Combined Classifier prediction (0: No Flood, 1: Some Water, 2: Flooded):", combined_pred)
+        final_result = classification_formatter.format_output(combined_pred)
+    elif classification_mode == "fused":
+        # (A) Sensor-based Classification.
+        try:
+            model_loader = ModelLoader()
+            sensor_model = model_loader.load_sensor_model()
+            sensor_classifier = SensorClassifier()
+            sensor_pred = sensor_classifier.predict(sensor_model, sample_message["sensor_data"])
+            print("Sensor-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded):", sensor_pred)
+        except Exception as e:
+            print("Error during sensor classification:", e)
+            sensor_pred = None
+
+        # (B) Image-based Classification using YOLO detections.
+        # image_classifier = ImageClassifier()
+        image_classifier = EnhancedImageClassifier()
+        image_pred = image_classifier.classify_flood(detection_results)
+        print("Image-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded):", image_pred)
+
+        # (C) Fuse the Two Predictions.
+        fusion = FusionStrategy()
+        final_pred = fusion.merge_predictions(sensor_pred, image_pred)
+        final_result = classification_formatter.format_output(final_pred)
+    else:
+        print("Invalid classification mode selected.")
+        return
+
     print("\n--- Final Flood Classification ---")
     print(final_result)
 
-    # -------------------------------------------------
-    # 5. (Optional) Start the MQTT Receiver to listen for data.
-    # -------------------------------------------------
-    # Uncomment the following lines if you wish to run the MQTT receiver.
+    # -------------------------------------------
+    # 5. (Optional) Start MQTT Receiver
+    # -------------------------------------------
+    # Uncomment the following lines to start the MQTT receiver.
     #
     # receiver = MQTTReceiver(
-    #     broker_url="mqtt.example.com",  # Replace with your MQTT broker URL
-    #     broker_port=1883,               # Replace with your MQTT broker port if different
-    #     topic="your/topic/here"
+    #     broker_url=config.MQTT_BROKER_URL,  # Replace with your MQTT broker URL.
+    #     broker_port=config.MQTT_BROKER_PORT,               # Replace with your MQTT broker port if different.
+    #     topic=config.MQTT_TOPIC
     # )
     # receiver.start()
 
