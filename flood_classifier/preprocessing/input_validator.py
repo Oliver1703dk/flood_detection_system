@@ -3,14 +3,14 @@ class InputValidator:
     Validates structured feature vector input before processing.
     """
 
-    def validate(self, feature_vector):
+    def validate(self, input_data):
         """
-        Checks if input data follows expected structure.
+        Checks if input data follows the expected structure.
         """
-        if not isinstance(feature_vector, dict) or "feature_vector" not in feature_vector:
+        if not isinstance(input_data, dict) or "feature_vector" not in input_data:
             return False, "Invalid input: Missing 'feature_vector' key."
 
-        feature_vector = feature_vector["feature_vector"]
+        feature_vector = input_data["feature_vector"]
 
         # Validate image_data
         if "image_data" in feature_vector:

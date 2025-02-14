@@ -1,9 +1,16 @@
 class ResultFormatter:
-    def __init__(self, confidence_threshold=0.5):
+    def __init__(self, confidence_threshold=0.30):
         self.confidence_threshold = confidence_threshold
 
     def format_results(self, results):
-        """Filters and formats YOLOv8 results."""
+        """
+        Filters and formats YOLOv8 results.
+
+        Expected that each result has a 'boxes' attribute with objects containing:
+        - label
+        - confidence
+        - xywh: bounding box coordinates (converted to list)
+        """
         formatted_results = []
         for result in results:
             for box in result.boxes:
@@ -14,4 +21,3 @@ class ResultFormatter:
                         "bounding_box": box.xywh.tolist(),
                     })
         return formatted_results
-

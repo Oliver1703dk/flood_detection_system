@@ -5,7 +5,7 @@ class FeatureExtractor:
     Extracts numerical features from structured input for classification.
     """
 
-    def extract_features(self, feature_vector):
+    def extract_features(self, input_data):
         """
         Converts image detections & sensor data into numerical arrays.
 
@@ -20,8 +20,7 @@ class FeatureExtractor:
             }
         }
         """
-
-        feature_vector = feature_vector.get("feature_vector", {})
+        feature_vector = input_data.get("feature_vector", {})
 
         # Extract image detections
         detections = feature_vector.get("image_data", [])
