@@ -1,5 +1,7 @@
 import numpy as np
 
+from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
+
 class CombinedClassifier:
     """
     Combines raw features from image and sensor data into a flood score,
@@ -13,8 +15,7 @@ class CombinedClassifier:
     """
 
     def __init__(self, image_weight=1.0, sensor_weight=1.0,
-                 threshold_low=0.2, threshold_high=0.5,
-                 sensor_params=None):
+                 threshold_low=0.2, threshold_high=0.5):
         """
         Initializes the classifier with weightings and thresholds.
 
@@ -30,8 +31,13 @@ class CombinedClassifier:
         self.sensor_weight = sensor_weight
         self.threshold_low = threshold_low
         self.threshold_high = threshold_high
+
+        # Load sensor baselines from file
+        baseline_calculator = BaselineCalculator()
+        sensor_baselines = baseline_calculator.get_baselines()
+
         # Set default sensor baselines if not provided
-        self.sensor_params = sensor_params or {
+        self.sensor_params = sensor_baselines or {
             "temperature_baseline": 20, 
             "humidity_baseline": 50, 
             "pressure_baseline": 1013

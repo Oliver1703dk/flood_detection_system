@@ -1,5 +1,5 @@
 class ResultFormatter:
-    def __init__(self, confidence_threshold=0.30):
+    def __init__(self, confidence_threshold=0.10):
         self.confidence_threshold = confidence_threshold
 
     def format_results(self, results):

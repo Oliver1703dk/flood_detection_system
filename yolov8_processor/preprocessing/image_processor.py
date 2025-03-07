@@ -24,5 +24,6 @@ class ImageProcessor:
         """Full preprocessing pipeline for an image."""
         image = self.decode_image(base64_str)
         image = self.resize_image(image)
-        image = self.normalize_image(image)
+        # TODO: Commented this out to test the model without normalization
+        # image = self.normalize_image(image)
         return image

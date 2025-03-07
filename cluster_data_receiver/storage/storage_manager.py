@@ -7,7 +7,7 @@ class StorageManager:
     Temporarily stores validated data for processing.
     """
 
-    def __init__(self, storage_dir="storage"):
+    def __init__(self, storage_dir="storage/data"):
         """
         Initialize the storage manager.
 

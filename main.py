@@ -8,6 +8,9 @@ import numpy as np
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
 from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
+from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
+from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
+from yolov8_processor.inference.multi_model_inference import MultiModelInference
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.preprocessing.image_processor import ImageProcessor
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
@@ -36,11 +39,15 @@ def simulate_message():
     
 
     if(config.IMAGE_MODE == "test"): 
+        print(f'Using test image {config.IMAGE_NAME}')
         # Construct the test image file path.
-        test_image_path = os.path.join("test_images", "sink.jpg")
+        test_image_path = os.path.join("test_images", config.IMAGE_NAME +'.jpg')
         
         # Read the image from disk.
         image = cv2.imread(test_image_path)
+        if image is None:
+            raise ValueError(f"Failed to load test image from path: {test_image_path}")
+        print('Image loaded successfully')
     else: 
         # Create a dummy white 640x640 image.
         image = np.ones((config.IMAGE_SIZE[1], config.IMAGE_SIZE[0], 3), dtype=np.uint8) * 255
@@ -85,7 +92,7 @@ def main():
     try:
         sample_message = simulate_message()
         print("\n--- Simulated Message ---")
-        print(json.dumps(sample_message, indent=4))
+        # print(json.dumps(sample_message, indent=4))
     except Exception as e:
         print("Error simulating message:", e)
         return
@@ -112,18 +119,31 @@ def main():
     except Exception as e:
         print("Error in image preprocessing:", e)
         return
+    
+    
 
     try:
-        inference = YOLOv8Inference()
-        results = inference.run_inference(preprocessed_image)
+        # inference = YOLOv8Inference()
+        # results = inference.run_inference(preprocessed_image)
+        # New multi-model call:
+        model_info = [
+            ("1", "best1.pt"),
+            # ("2", "best2.pt"),
+            # ("3", "best3.pt"),
+            # ("4", "best4.pt"),
+            # ("5", "best5.pt"),
+        ]
+        multi_inference = MultiModelInference(model_info)
+        aggregated_results = multi_inference.run_all_inference(preprocessed_image)
+
         print("YOLOv8 inference completed.")
     except Exception as e:
         print("Error during YOLOv8 inference:", e)
         results = None
 
     # Format the YOLO detection results.
-    result_formatter = ResultFormatter(confidence_threshold=0.3)
-    detection_results = result_formatter.format_results(results) if results else []
+    result_formatter = ResultFormatter()
+    detection_results = result_formatter.format_results(aggregated_results) if aggregated_results else []
     print("\n--- YOLOv8 Detection Results ---")
     print(detection_results)
 
@@ -178,6 +198,27 @@ def main():
     else:
         print("Invalid classification mode selected.")
         return
+    
+    # Save the data and classification results.
+    saver = DataResultsSaver()
+    saver.save(sample_message, final_result)
+
+    # -------------------------------------------
+    # 5. Update the Baseline Using Latest Data
+    # -------------------------------------------
+    baseline_calculator = BaselineCalculator(
+        results_dir="storage/data_results",
+        baseline_file="storage/sensor_baselines.json",
+        tau=12
+    )
+
+    print("\n🔄 Updating sensor baselines...")
+    current_baselines = baseline_calculator.update_baselines()
+
+    if current_baselines:
+        print("✅ Updated Baselines:", current_baselines)
+    else:
+        print("❌ Baseline update failed (no stable period found).")
 
     print("\n--- Final Flood Classification ---")
     print(final_result)
