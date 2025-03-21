@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import config
+from yolov8_processor.inference.label_normalizer import LabelNormalizer
 
 class YOLOv8Inference:
     def __init__(self, model_filename, identifier=""):
@@ -24,6 +25,9 @@ class YOLOv8Inference:
     def run_inference(self, image):
         """Runs YOLOv8 inference on the given image."""
         results = self.model(image)
+        # Normalize the labels in the results
+        normalizer = LabelNormalizer()
+        results = normalizer.normalize(results)
         self.draw_bounding_boxes(image, results)
         return results
 

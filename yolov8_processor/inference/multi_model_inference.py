@@ -23,6 +23,7 @@ class MultiModelInference:
         for model_id, inference_model in self.models.items():
             print(f"Running inference for model {model_id}...")
             results = inference_model.run_inference(image)
+            print(f"Model {model_id} detected {len(results)} objects.")
             results_dict[model_id] = results
         
         # Aggregate/fuse predictions from all models.
