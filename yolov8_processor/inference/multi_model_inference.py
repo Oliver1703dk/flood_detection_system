@@ -28,7 +28,9 @@ class MultiModelInference:
         
         # Aggregate/fuse predictions from all models.
         final_classifier = YOLOv8FinalClassifier()
-        aggregated_results = final_classifier.classify(results_dict)
+        aggregated_results = final_classifier.classify_and_draw(results_dict, image)
+
+        # aggregated_results = final_classifier.classify(results_dict)
         return aggregated_results
 
 

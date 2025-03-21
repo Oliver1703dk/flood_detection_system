@@ -8,7 +8,7 @@ IMAGE_SIZE = (640, 640)
 # Have this either 'test' or anything else to use a dummy image
 IMAGE_MODE = "test"
 # Image name for testing
-IMAGE_NAME = "flood1"
+IMAGE_NAME = "sink"
 
 # Thresholds for EnhancedImageClassifier (or any classifier that uses thresholds)
 ENHANCED_THRESHOLD_LOW = 0.1

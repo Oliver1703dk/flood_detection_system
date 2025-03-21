@@ -9,5 +9,5 @@
         "location": "Test Location",
         "camera_id": "CAM123"
     },
-    "classification_result": "No Flood"
+    "classification_result": "Some Water"
 }
