@@ -128,10 +128,10 @@ def main():
         # New multi-model call:
         model_info = [
             ("1", "best1.pt"),
-            # ("2", "best2.pt"),
-            # ("3", "best3.pt"),
-            # ("4", "best4.pt"),
-            # ("5", "best5.pt"),
+            ("2", "best2.pt"),
+            ("3", "best3.pt"),
+            ("4", "best4.pt"),
+            ("5", "best5.pt"),
         ]
         multi_inference = MultiModelInference(model_info)
         aggregated_results = multi_inference.run_all_inference(preprocessed_image)
