@@ -4,11 +4,12 @@ import numpy as np
 import config  # Import config to access IMAGE_NAME
 
 class AggregatedBox:
-    def __init__(self, xywh, conf, cls):
-        # xywh is stored as a NumPy array so that later we can call .tolist() if needed.
+    def __init__(self, xywh, conf, cls, model_ids=None):
         self.xywh = np.array(xywh)
         self.conf = conf
         self.cls = cls
+        self.model_ids = set(model_ids) if model_ids else set()
+
 
 class AggregatedResult:
     def __init__(self, names, boxes):
@@ -47,8 +48,10 @@ class YOLOv8FinalClassifier:
                         all_detections.append({
                             "xywh": xywh,
                             "conf": conf,
-                            "cls": cls_idx
+                            "cls": cls_idx,
+                            "model_id": model_id
                         })
+
 
         # Group overlapping detections and aggregate their confidences.
         aggregated_boxes = self.group_detections(all_detections)
@@ -73,7 +76,9 @@ class YOLOv8FinalClassifier:
             if used[i]:
                 continue
             group = [detections[i]]
+            model_ids = {detections[i]['model_id']}
             used[i] = True
+
             for j in range(i + 1, len(detections)):
                 if used[j]:
                     continue
@@ -81,6 +86,7 @@ class YOLOv8FinalClassifier:
                 iou = self.compute_iou(detections[i]['xywh'], detections[j]['xywh'])
                 if iou >= self.iou_threshold:
                     group.append(detections[j])
+                    model_ids.add(detections[j]['model_id'])
                     used[j] = True
             # Aggregate group: compute weighted average for bounding box and sum confidences.
             total_conf = sum(d['conf'] for d in group)
@@ -90,7 +96,8 @@ class YOLOv8FinalClassifier:
                     weighted_box[k] += d['xywh'][k] * d['conf']
             weighted_box = [val / total_conf for val in weighted_box]
             # Use the class from the first detection (they should all be "water")
-            aggregated_box = AggregatedBox(weighted_box, total_conf, group[0]['cls'])
+            aggregated_box = AggregatedBox(weighted_box, total_conf, group[0]['cls'], model_ids=model_ids)
+
             grouped_boxes.append(aggregated_box)
         
         return grouped_boxes
@@ -163,7 +170,8 @@ class YOLOv8FinalClassifier:
                 
                 # Draw the rectangle and label.
                 cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label_text = f"{label} ({conf:.2f})"
+                agreement = len(box.model_ids)
+                label_text = f"{label} ({conf:.2f}) M={agreement}"
                 cv2.putText(image, label_text, (x1, max(y1 - 10, 0)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         

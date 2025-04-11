@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import json
 import base64
@@ -9,6 +10,7 @@ from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
 from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
 from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
+from flood_classifier.inference.classifier_both import ClassifierBoth
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
 from yolov8_processor.inference.multi_model_inference import MultiModelInference
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
@@ -66,7 +68,7 @@ def simulate_message():
         "image_data": base64_image,
         "sensor_data": {
             "temperature": 25.0,
-            "humidity": 50.0,
+            "humidity": 55.0,
             "pressure": 1013.25
         },
         "metadata": {
@@ -140,6 +142,7 @@ def main():
     except Exception as e:
         print("Error during YOLOv8 inference:", e)
         results = None
+        aggregated_results = None
 
     # Format the YOLO detection results.
     result_formatter = ResultFormatter()
@@ -153,26 +156,23 @@ def main():
     classification_formatter = ClassificationFormatter()
 
     if classification_mode == "combined":
-        # Use the CombinedClassifier to fuse image and sensor data internally.
-        combined_classifier = CombinedClassifier(
-            image_weight=1.0, sensor_weight=1.0,
-            threshold_low=0.2, threshold_high=0.5
+        # Use the new combined classifier ClassifierBoth.
+        classifier_both = ClassifierBoth(
+            baseline_calculator=BaselineCalculator(),
+            image_classifier=EnhancedImageClassifier()
         )
-        # Build an input in the expected format.
-        combined_input = {
-            "feature_vector": {
-                "image_data": detection_results,  # List of detections (each with 'bounding_box' and 'confidence').
-                "sensor_data": [
-                    sample_message["sensor_data"]["temperature"],
-                    sample_message["sensor_data"]["humidity"],
-                    sample_message["sensor_data"]["pressure"]
-                ]
-            }
-        }
-        # Note: Adjust the image_size if necessary. Here, we use (640, 640) matching our dummy image.
-        combined_pred = combined_classifier.classify(combined_input, image_size=config.IMAGE_SIZE)
-        print("Combined Classifier prediction (0: No Flood, 1: Some Water, 2: Flooded):", combined_pred)
-        final_result = classification_formatter.format_output(combined_pred)
+        # Convert metadata timestamp to datetime.
+        timestamp = datetime.fromisoformat(sample_message["metadata"]["timestamp"].replace("Z", "+00:00"))
+        combined_result = classifier_both.classify_flood(
+            sensor_data=sample_message["sensor_data"],
+            detection_data=detection_results,
+            image_size=config.IMAGE_SIZE,
+            timestamp=timestamp
+        )
+        print("Combined flood classification result:")
+        print(combined_result)
+        final_pred = combined_result["final_prediction"]
+        final_result = classification_formatter.format_output(final_pred)
     elif classification_mode == "fused":
         # (A) Sensor-based Classification.
         try:

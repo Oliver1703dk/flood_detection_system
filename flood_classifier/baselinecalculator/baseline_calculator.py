@@ -3,14 +3,34 @@ import json
 import math
 from datetime import datetime, timedelta
 
+# --- Helper Function to Determine Time Window ---
+def get_time_window(timestamp):
+    """
+    Define diurnal time windows using UTC hours:
+      - pre_dawn: 03:00 to 09:00
+      - midday:    09:00 to 15:00
+      - evening:   15:00 to 21:00
+      - night:     21:00 to 03:00
+    """
+    hour = timestamp.hour
+    if 3 <= hour < 9:
+        return "pre_dawn"
+    elif 9 <= hour < 15:
+        return "midday"
+    elif 15 <= hour < 21:
+        return "evening"
+    else:
+        return "night"
+
+# --- Baseline Calibration Class ---
 class BaselineCalculator:
     """
-    Computes and updates sensor baselines using stable sensor data (at least 24 hours of "No Flood").
+    Computes and updates sensor baselines using stable sensor data (at least 24 hours of "No Flood")
+    for each time window.
     
-    - Overwrites `sensor_baselines.json` each time.
-    - Saves the latest gathered sensor values in `storage/data_results/YYYY-MM-DD/HH-MM-SS.json`.
+    - Overwrites `sensor_baselines.json` with the computed baseline values.
+    - (Note: It does not save the latest sensor data since another method is handling that.)
     """
-
     def __init__(self, 
                  results_dir="storage/data_results", 
                  baseline_file="storage/sensor_baselines.json",
@@ -19,24 +39,22 @@ class BaselineCalculator:
         self.results_dir = results_dir
         self.baseline_file = baseline_file
         self.required_hours = required_hours
-        self.tau = tau  # decay factor for weighting
+        self.tau = tau  # Decay factor for weighting
 
     def update_baselines(self):
         """
-        1. Computes the latest baseline and overwrites `sensor_baselines.json`.
-        2. Saves the most recent gathered sensor values into `storage/data_results/YYYY-MM-DD/HH-MM-SS.json`.
+        Scans stored sensor readings, groups them by time window, computes weighted averages for each window,
+        and saves the resulting baseline to file.
         """
         now = datetime.utcnow()
         stable_entries = []
 
-        # Ensure results directory exists
         if not os.path.exists(self.results_dir):
             print("❌ Results directory does not exist.")
             return None
 
-        # Scan ALL folders in data_results/ in chronological order
-        subfolders = sorted(os.listdir(self.results_dir))
-        for subfolder in subfolders:
+        # Iterate through subfolders (each day) to gather sensor data
+        for subfolder in sorted(os.listdir(self.results_dir)):
             subfolder_path = os.path.join(self.results_dir, subfolder)
             if not os.path.isdir(subfolder_path):
                 continue
@@ -46,6 +64,7 @@ class BaselineCalculator:
                     try:
                         with open(file_path, "r") as f:
                             data = json.load(f)
+                        # Only consider entries labeled as "No Flood"
                         if str(data.get("classification_result", "")).strip().lower() != "no flood":
                             continue
                         timestamp_str = data.get("metadata", {}).get("timestamp", None)
@@ -63,103 +82,95 @@ class BaselineCalculator:
             print("⚠️ No 'No Flood' entries found. Using existing baseline values.")
             return self.get_baselines()
 
-        # Sort entries by timestamp
+        # Sort entries chronologically and select a stable period
         stable_entries.sort(key=lambda x: x["timestamp"])
-
-        # Determine the stable period
         latest_time = stable_entries[-1]["timestamp"]
+
         stable_period = [stable_entries[-1]]
         max_gap = timedelta(hours=5)
-
         for entry in reversed(stable_entries[:-1]):
-            if stable_period and (stable_period[0]["timestamp"] - entry["timestamp"]) <= max_gap:
+            if (stable_period[0]["timestamp"] - entry["timestamp"]) <= max_gap:
                 stable_period.insert(0, entry)
             else:
                 break
 
         if (latest_time - stable_period[0]["timestamp"]).total_seconds() < self.required_hours * 3600:
-            print("⚠️ Stable period is too short. Using latest 'No Flood' sensor readings.")
-            return self._write_latest_no_flood_data_to_results(stable_entries)
+            print("⚠️ Stable period is too short. Using existing baseline values.")
+            return self.get_baselines()
 
-        # Compute weighted averages
-        weighted_sum = {"temperature": 0.0, "humidity": 0.0, "pressure": 0.0}
-        total_weight = {"temperature": 0.0, "humidity": 0.0, "pressure": 0.0}
+        # Initialize groups for the four time windows
+        baselines_by_window = {}
+        for window in ["pre_dawn", "midday", "evening", "night"]:
+            baselines_by_window[window] = {
+                "weighted_sum": {"temperature": 0.0, "humidity": 0.0, "pressure": 0.0},
+                "total_weight": {"temperature": 0.0, "humidity": 0.0, "pressure": 0.0},
+                "count": 0
+            }
 
+        # Group sensor readings and compute weighted sums using exponential decay
         for entry in stable_period:
+            time_window = get_time_window(entry["timestamp"])
+            baselines_by_window[time_window]["count"] += 1
             delta_hours = (latest_time - entry["timestamp"]).total_seconds() / 3600.0
             weight = math.exp(-delta_hours / self.tau)
             sensor_data = entry.get("sensor_data", {})
             for key in ["temperature", "humidity", "pressure"]:
                 value = sensor_data.get(key)
                 if value is not None:
-                    weighted_sum[key] += value * weight
-                    total_weight[key] += weight
+                    baselines_by_window[time_window]["weighted_sum"][key] += value * weight
+                    baselines_by_window[time_window]["total_weight"][key] += weight
 
+        # Calculate the final baseline for each time window
         baseline = {}
-        for key in ["temperature", "humidity", "pressure"]:
-            baseline[key + "_baseline"] = weighted_sum[key] / total_weight[key] if total_weight[key] > 0 else None
+        for window, data in baselines_by_window.items():
+            if data["count"] == 0:
+                continue
+            baseline[window] = {}
+            for key in ["temperature", "humidity", "pressure"]:
+                if data["total_weight"][key] > 0:
+                    baseline[window][key + "_baseline"] = data["weighted_sum"][key] / data["total_weight"][key]
+                else:
+                    baseline[window][key + "_baseline"] = None
 
-        print("✅ Calculated baseline from stable period:", baseline)
+        print("✅ Calculated baselines for each time window:", baseline)
 
-        # Save to `sensor_baselines.json`
+        # Save the new baseline to the baseline file only
         self._write_baseline_file(baseline)
-
-        # Save the latest gathered sensor data to `data_results/YYYY-MM-DD/HH-MM-SS.json`
-        self._write_latest_no_flood_data_to_results(stable_entries)
-
         return baseline
 
     def _write_baseline_file(self, new_baseline):
-        """
-        Overwrites the baseline file with the latest computed values.
-        """
         os.makedirs(os.path.dirname(self.baseline_file), exist_ok=True)
-
-        # Overwrite with the new baseline
         with open(self.baseline_file, "w") as f:
             json.dump(new_baseline, f, indent=4)
-
         print(f"✅ Baseline file updated: {self.baseline_file}")
 
     def _write_latest_no_flood_data_to_results(self, stable_entries):
-        """
-        Saves the latest gathered sensor values (not the baseline) into the `data_results/YYYY-MM-DD/HH-MM-SS.json` file.
-        """
-        if not stable_entries:
-            print("⚠️ No 'No Flood' sensor data available to save.")
-            return
-
-        latest_sensor_data = stable_entries[-1]  # Most recent "No Flood" data
-        now = datetime.utcnow()
-        date_str = now.strftime("%Y-%m-%d")
-        time_str = now.strftime("%H-%M-%S")
-
-        save_dir = os.path.join(self.results_dir, date_str)
-        os.makedirs(save_dir, exist_ok=True)
-
-        file_path = os.path.join(save_dir, f"{time_str}.json")
-
-        # Save the latest sensor reading
-        sensor_entry = {
-            "sensor_data": latest_sensor_data["sensor_data"],
-            "metadata": {
-                "timestamp": now.isoformat() + "Z",
-                "location": "Latest Sensor Data",
-                "camera_id": "LATEST_SENSOR"
-            },
-            "classification_result": "No Flood"
-        }
-
-        with open(file_path, "w") as f:
-            json.dump(sensor_entry, f, indent=4)
-
-        print(f"✅ Latest sensor data stored in data_results: {file_path}")
+        # This method is no longer used for saving data results.
+        pass
 
     def get_baselines(self):
-        """
-        Retrieves the latest baseline values from the baseline file.
-        """
         if os.path.exists(self.baseline_file):
             with open(self.baseline_file, "r") as f:
                 return json.load(f)
         return None
+
+    def get_baseline_for_time(self, timestamp):
+        """
+        Returns the baseline for the corresponding time window of the given timestamp.
+        """
+        baselines = self.get_baselines()
+        if not baselines:
+            return None
+        time_window = get_time_window(timestamp)
+        return baselines.get(time_window, None)
+
+# --- Example Usage ---
+if __name__ == "__main__":
+    # Create a BaselineCalculator instance and update baselines
+    baseline_calculator = BaselineCalculator()
+    baseline = baseline_calculator.update_baselines()
+
+    # Retrieve baseline for a specific time (current UTC time in this example)
+    current_time = datetime.utcnow()
+    current_baseline = baseline_calculator.get_baseline_for_time(current_time)
+    print("Baseline for current time window:", current_baseline)

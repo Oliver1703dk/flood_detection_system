@@ -1,7 +1,7 @@
 import numpy as np
 
 class EnhancedImageClassifier:
-    def __init__(self, thresholds=(0.05, 0.2), min_detection_conf=0.05):
+    def __init__(self, thresholds=(0.05, 0.5), min_detection_conf=0.05):
         # thresholds are tuned values for classifying flood severity.
         self.threshold_low, self.threshold_high = thresholds
         self.min_detection_conf = min_detection_conf
@@ -30,7 +30,10 @@ class EnhancedImageClassifier:
             bbox_area = bbox[2] * bbox[3]
             area_ratio = bbox_area / image_area if image_area != 0 else 0
 
-            score = conf * area_ratio
+            model_agreement = len(d.get("model_ids", []))  # or just: len(d.model_ids) if using objects
+            agreement_boost = 1 + 0.1 * (model_agreement - 1)  # +10% per extra agreeing model
+            score = conf * area_ratio * agreement_boost
+
             scores.append(score)
 
         overall_score = sum(scores) if scores else 0

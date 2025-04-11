@@ -1,5 +1,22 @@
 {
-    "temperature_baseline": 25.0,
-    "humidity_baseline": 50.0,
-    "pressure_baseline": 1013.25
+    "pre_dawn": {
+        "temperature_baseline": 16.5,
+        "humidity_baseline": 88.2,
+        "pressure_baseline": 1016.3
+    },
+    "midday": {
+        "temperature_baseline": 27.8,
+        "humidity_baseline": 55.0,
+        "pressure_baseline": 1012.5
+    },
+    "evening": {
+        "temperature_baseline": 22.3,
+        "humidity_baseline": 68.4,
+        "pressure_baseline": 1013.1
+    },
+    "night": {
+        "temperature_baseline": 18.0,
+        "humidity_baseline": 75.7,
+        "pressure_baseline": 1014.0
+    }
 }
