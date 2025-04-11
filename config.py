@@ -13,9 +13,9 @@ IMAGE_NAME = "road-green4"
 
 # You can add any other configuration variables you need
 # For example, MQTT settings or sensor model paths:
-MQTT_BROKER_URL = "mqtt.example.com"
+MQTT_BROKER_URL = "localhost"
 MQTT_BROKER_PORT = 1883
-MQTT_TOPIC = "your/topic/here"
+MQTT_TOPIC = "flood/detection"
 
 
 
