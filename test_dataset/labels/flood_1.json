@@ -1,0 +1,10 @@
+{
+  "image": "flood_1.jpg",
+  "label": "flood",
+  "flood_level": "little",
+  "sensor_data": {
+    "humidity": 77,
+    "temperature": 20.8,
+    "pressure": 1009
+  }
+}

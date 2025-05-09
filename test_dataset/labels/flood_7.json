@@ -1,0 +1,10 @@
+{
+  "image": "flood_7.jpg",
+  "label": "flood",
+  "flood_level": "medium\u2011severe",
+  "sensor_data": {
+    "humidity": 88,
+    "temperature": 18.7,
+    "pressure": 1003
+  }
+}

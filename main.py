@@ -4,6 +4,7 @@ import json
 import base64
 import cv2
 import numpy as np
+import glob
 
 # Import modules from your project.
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
@@ -76,6 +77,35 @@ def simulate_message():
     return message
 
 
+
+def load_test_dataset(dataset_dir):
+    """Yields (message_dict, ground_truth_label) for each JSON+image pair."""
+    labels_dir = os.path.join(dataset_dir, "labels")
+    images_dir = os.path.join(dataset_dir, "images")
+
+    for jpath in sorted(glob.glob(os.path.join(labels_dir, "*.json"))):
+        sample = json.load(open(jpath))
+        # read & encode the image
+        img = cv2.imread(os.path.join(images_dir, sample["image"]))
+        if img is None:
+            raise ValueError(f"Cannot read {sample['image']}")
+        ok, buf = cv2.imencode(".jpg", img)
+        if not ok:
+            raise ValueError(f"Encode failed for {sample['image']}")
+        b64 = base64.b64encode(buf).decode()
+
+        msg = {
+            "image_data": b64,
+            "sensor_data": sample["sensor_data"],
+            "metadata": {
+                "timestamp": sample.get("timestamp", datetime.utcnow().isoformat()+"Z"),
+                "location": sample.get("location","Dataset"),
+                "camera_id": sample.get("camera_id","N/A"),
+            }
+        }
+        yield msg, sample["label"]  # label is "flood" or "no_flood"
+
+
 def main():
     # -------------------------------
     # Choose Classification Mode:
@@ -94,6 +124,17 @@ def main():
     except Exception as e:
         print("Error simulating message:", e)
         return
+    
+
+    # # -------------------------------------------
+    # # 1. Load the entire test mini-dataset
+    # # -------------------------------------------
+    # total = correct = 0
+
+    # for sample_message, gt_label in load_test_dataset(config.TEST_DATASET_DIR):
+    #     total += 1
+    #     print(f"\n--- Sample #{total} (ground_truth={gt_label}) ---")
+
 
     # -------------------------------------------
     # 2. Validate and Store Data
@@ -124,13 +165,20 @@ def main():
         # inference = YOLOv8Inference()
         # results = inference.run_inference(preprocessed_image)
         # New multi-model call:
+        model_size = config.model_size
+        # model_info = [
+        #     ("1", f"{model_size}/best1.pt"),
+        #     ("2", f"{model_size}/best2.pt"),
+        #     ("3", f"{model_size}/best3.pt"),
+        #     # ("4", f"{model_size}/best4.pt"),
+        #     # ("5", f"{model_size}/best5.pt"),
+        # ]
+        # model_info takes model_number to know how many models to load
         model_info = [
-            ("1", "best1.pt"),
-            ("2", "best2.pt"),
-            ("3", "best3.pt"),
-            ("4", "best4.pt"),
-            ("5", "best5.pt"),
+            (str(i), f"{model_size}/best{i}.pt") for i in range(1, config.model_number + 1)
         ]
+        
+
         multi_inference = MultiModelInference(model_info)
         aggregated_results = multi_inference.run_all_inference(preprocessed_image)
 
@@ -218,6 +266,21 @@ def main():
 
     print("\n--- Final Flood Classification ---")
     print(final_result)
+
+    # # ─── compare to ground truth ───
+    # # any non-"No Flood" counts as “flood”
+    # pred_is_flood = (final_result != "No Flood")
+    # gt_is_flood   = (gt_label == "flood")
+    # if pred_is_flood == gt_is_flood:
+    #     print("✅ Correct")
+    #     correct += 1
+    # else:
+    #     print("❌ Wrong")
+
+
+    # print(f"\n=== Overall: {correct}/{total} = {correct/total:.1%} ===")
+
+
 
     # -------------------------------------------
     # 5. (Optional) Start MQTT Receiver

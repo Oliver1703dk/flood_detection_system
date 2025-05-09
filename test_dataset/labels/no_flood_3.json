@@ -1,0 +1,9 @@
+{
+  "image": "no_flood_3.jpg",
+  "label": "no_flood",
+  "sensor_data": {
+    "humidity": 50,
+    "temperature": 22.3,
+    "pressure": 1015
+  }
+}

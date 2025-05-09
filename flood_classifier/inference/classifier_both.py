@@ -14,9 +14,9 @@ class ClassifierBoth:
     def __init__(self, 
                  baseline_calculator=None, 
                  image_classifier=None,
-                 humidity_threshold=10,       # ΔRH threshold
-                 temperature_threshold=-2,      # ΔT threshold (i.e. drop > 2°C)
-                 pressure_threshold=-1,         # ΔP threshold (i.e. drop > 1 unit)
+                 humidity_threshold=25,       # ΔRH threshold
+                 temperature_threshold=-2.5,      # ΔT threshold (i.e. drop > 2°C)
+                 pressure_threshold=-5,         # ΔP threshold (i.e. drop > 1 unit)
                  humidity_weight=0.1,           # Weight for humidity anomaly
                  temperature_weight=0.05,       # Weight for temperature anomaly
                  pressure_weight=0.03,          # Weight for pressure anomaly
@@ -51,13 +51,30 @@ class ClassifierBoth:
                 else:
                     anomalies["delta_" + key] = 0
 
-            # Apply thresholds to determine boost to the flood score
-            if anomalies.get("delta_humidity", 0) > self.humidity_threshold:
-                sensor_boost += self.humidity_weight
-            if anomalies.get("delta_temperature", 0) < self.temperature_threshold:
-                sensor_boost += self.temperature_weight
-            if anomalies.get("delta_pressure", 0) < self.pressure_threshold:
-                sensor_boost += self.pressure_weight
+            # # Apply thresholds to determine boost to the flood score
+            # if anomalies.get("delta_humidity", 0) > self.humidity_threshold:
+            #     sensor_boost += self.humidity_weight
+            # if anomalies.get("delta_temperature", 0) < self.temperature_threshold:
+            #     sensor_boost += self.temperature_weight
+            # if anomalies.get("delta_pressure", 0) < self.pressure_threshold:
+            #     sensor_boost += self.pressure_weight
+            # NEW ---------------------------------------------
+            dh = anomalies.get("delta_humidity", 0)
+            dt = anomalies.get("delta_temperature", 0)
+            dp = anomalies.get("delta_pressure", 0)
+
+            if dh > self.humidity_threshold:
+                sensor_boost += self._graduated_weight(
+                    dh, self.humidity_threshold, self.humidity_weight)
+
+            if dt < self.temperature_threshold:
+                sensor_boost += self._graduated_weight(
+                    dt, self.temperature_threshold, self.temperature_weight)
+
+            if dp < self.pressure_threshold:
+                sensor_boost += self._graduated_weight(
+                    dp, self.pressure_threshold, self.pressure_weight)
+
         else:
             print("Baseline not available; relying on image classifier only.")
 
@@ -86,3 +103,18 @@ class ClassifierBoth:
             "anomalies": anomalies,
             "baseline": baseline
         }
+
+
+    # --- NEW helper -----------------------------------------
+    @staticmethod
+    def _graduated_weight(delta, gate, base_weight, severe_factor=2):
+        """
+        Returns base_weight if delta crosses gate once,
+        and (severe_factor * base_weight) if it crosses twice.
+        Example: gate = -5  →  severe tier at -10.
+        """
+        if (gate < 0 and delta < gate * severe_factor) or \
+           (gate > 0 and delta > gate * severe_factor):
+            return base_weight * severe_factor
+        return base_weight
+

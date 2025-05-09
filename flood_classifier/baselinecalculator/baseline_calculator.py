@@ -3,6 +3,8 @@ import json
 import math
 from datetime import datetime, timedelta
 
+import config
+
 # --- Helper Function to Determine Time Window ---
 def get_time_window(timestamp):
     """
@@ -35,11 +37,14 @@ class BaselineCalculator:
                  results_dir="storage/data_results", 
                  baseline_file="storage/sensor_baselines.json",
                  required_hours=24, 
-                 tau=12):
+                 tau=12,
+                #  default_baselines=None
+                 ):
         self.results_dir = results_dir
         self.baseline_file = baseline_file
         self.required_hours = required_hours
         self.tau = tau  # Decay factor for weighting
+        # self.default_baseline = default_baselines
 
     def update_baselines(self):
         """
@@ -149,6 +154,10 @@ class BaselineCalculator:
         pass
 
     def get_baselines(self):
+
+        if config.USE_DEFAULT_BASELINE:
+            return config.DEFAULT_BASELINE
+        
         if os.path.exists(self.baseline_file):
             with open(self.baseline_file, "r") as f:
                 return json.load(f)
