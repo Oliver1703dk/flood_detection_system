@@ -37,7 +37,7 @@ def simulate_message():
     """
     
 
-    if(config.IMAGE_MODE == "test"): 
+    if(config.IMAGE_MODE == "test_image"):
         print(f'Using test image {config.IMAGE_NAME}')
         # Construct the test image file path.
         test_image_path = os.path.join("test_images", config.IMAGE_NAME +'.jpg')
@@ -62,6 +62,7 @@ def simulate_message():
 
     # Construct sample message.
     message = {
+        "image_name": config.IMAGE_NAME + ".jpg",
         "image_data": base64_image,
         "sensor_data": {
             "temperature": 25.0,
@@ -180,7 +181,7 @@ def main():
         
 
         multi_inference = MultiModelInference(model_info)
-        aggregated_results = multi_inference.run_all_inference(preprocessed_image)
+        aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name=sample_message["image_name"])
 
         print("YOLOv8 inference completed.")
     except Exception as e:

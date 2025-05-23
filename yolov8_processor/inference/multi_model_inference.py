@@ -1,5 +1,6 @@
 import os
 import cv2
+import config
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.classifier.yolov8_final_classifier import YOLOv8FinalClassifier
 
@@ -13,7 +14,7 @@ class MultiModelInference:
         for model_id, model_filename in model_info:
             self.models[model_id] = YOLOv8Inference(model_filename=model_filename, identifier=model_id)
 
-    def run_all_inference(self, image):
+    def run_all_inference(self, image, image_name=config.IMAGE_NAME):
         """
         Runs inference for all models on the given image, then aggregates their predictions
         using the YOLOv8FinalClassifier.
@@ -21,14 +22,14 @@ class MultiModelInference:
         """
         results_dict = {}
         for model_id, inference_model in self.models.items():
-            print(f"Running inference for model {model_id}...")
-            results = inference_model.run_inference(image)
+            print(f"Running inference for model {model_id} on image {image_name}...")
+            results = inference_model.run_inference(image, image_name=image_name)
             print(f"Model {model_id} detected {len(results)} objects.")
             results_dict[model_id] = results
         
         # Aggregate/fuse predictions from all models.
         final_classifier = YOLOv8FinalClassifier()
-        aggregated_results = final_classifier.classify_and_draw(results_dict, image)
+        aggregated_results = final_classifier.classify_and_draw(results_dict, image, image_name=image_name)
 
         # aggregated_results = final_classifier.classify(results_dict)
         return aggregated_results

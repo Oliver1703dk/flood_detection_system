@@ -8,7 +8,7 @@ IMAGE_SIZE = (640, 640)
 # Have this either 'test' or anything else to use a dummy image
 # IMAGE_MODE = "test"
 # Image name for testing
-IMAGE_NAME = "no-flood7"
+IMAGE_NAME = "flood3"
 
 model_size = "nano"
 
@@ -26,6 +26,8 @@ MQTT_TOPIC = "flood/detection"
 TEST_DATASET_DIR = "test_dataset"
 
 IMAGE_MODE = "test_dataset"
+# IMAGE_MODE = "test_image"
+
 
 
 # Optional default baselines.  

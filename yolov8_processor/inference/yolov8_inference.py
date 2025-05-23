@@ -22,16 +22,16 @@ class YOLOv8Inference:
         self.model = YOLO(model_path)
         self.identifier = str(identifier)
 
-    def run_inference(self, image):
+    def run_inference(self, image, image_name=config.IMAGE_NAME):
         """Runs YOLOv8 inference on the given image."""
         results = self.model(image)
         # Normalize the labels in the results
         normalizer = LabelNormalizer()
         results = normalizer.normalize(results)
-        self.draw_bounding_boxes(image, results)
+        self.draw_bounding_boxes(image, results, image_name=image_name)
         return results
 
-    def draw_bounding_boxes(self, image, results):
+    def draw_bounding_boxes(self, image, results, image_name=config.IMAGE_NAME):
         """
         Draws bounding boxes on the image based on YOLOv8 detections.
         Saves the image using the model identifier.
@@ -59,11 +59,13 @@ class YOLOv8Inference:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Build the output filename with the identifier.
-        filename = f"{config.IMAGE_NAME}"
+        base_name, _ = os.path.splitext(image_name)
+        filename = base_name
         if self.identifier:
             filename += f"_{self.identifier}"
         filename += "_output.jpg"
-        save_path = os.path.join("test_images/results", filename)
+        os.makedirs(os.path.join(config.IMAGE_MODE, "results"), exist_ok=True)
+        save_path = os.path.join(config.IMAGE_MODE, "results", filename)
         cv2.imwrite(save_path, image_8u)
         print(f"Detection results saved to {save_path}")
 

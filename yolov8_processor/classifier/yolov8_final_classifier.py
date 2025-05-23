@@ -143,7 +143,7 @@ class YOLOv8FinalClassifier:
         y2 = y + h / 2
         return x1, y1, x2, y2
 
-    def draw_aggregated_bounding_boxes(self, image, aggregated_results):
+    def draw_aggregated_bounding_boxes(self, image, aggregated_results, image_name=config.IMAGE_NAME):
         """
         Draws aggregated bounding boxes on the provided image and saves the image.
         The image is saved to the same folder as your YOLOv8Inference output.
@@ -176,13 +176,16 @@ class YOLOv8FinalClassifier:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         # Build the output filename similar to YOLOv8Inference.
-        filename = f"{config.IMAGE_NAME}_aggregated_output.jpg"
-        save_path = os.path.join("test_images/results", filename)
+        base_name, _ = os.path.splitext(image_name)
+        initial_filename = base_name
+        filename = f"{initial_filename}_aggregated_output.jpg"
+        os.makedirs(os.path.join(config.IMAGE_MODE, "results"), exist_ok=True)
+        save_path = os.path.join(config.IMAGE_MODE, "results", filename)
         cv2.imwrite(save_path, image)
         print(f"Final aggregated output image saved to {save_path}")
         return image
 
-    def classify_and_draw(self, results_dict, image):
+    def classify_and_draw(self, results_dict, image, image_name=config.IMAGE_NAME):
         """
         Combines classification and drawing of aggregated bounding boxes.
         
@@ -194,5 +197,5 @@ class YOLOv8FinalClassifier:
             tuple: (aggregated_results, image_with_boxes)
         """
         aggregated_results = self.classify(results_dict)
-        image_with_boxes = self.draw_aggregated_bounding_boxes(image.copy(), aggregated_results)
+        image_with_boxes = self.draw_aggregated_bounding_boxes(image.copy(), aggregated_results, image_name=image_name)
         return aggregated_results

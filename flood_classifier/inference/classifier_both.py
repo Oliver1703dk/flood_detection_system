@@ -86,6 +86,7 @@ class ClassifierBoth:
         print(f"Image score: {image_score}")
         print(f"Sensor boost: {sensor_boost}")
         print(f"Combined score: {combined_score}")
+        print(f"Thresholds: no water < {self.threshold_low} < some water < {self.threshold_high} < much flood")
 
         # Determine final prediction based on the combined score
         if combined_score < self.threshold_low:
