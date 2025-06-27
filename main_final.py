@@ -67,15 +67,7 @@ def process_message(message_payload):
         return
 
     try:
-        # Define your multi-model inference configuration.
-        model_info = [
-            ("1", "best1.pt"),
-            ("2", "best2.pt"),
-            ("3", "best3.pt"),
-            ("4", "best4.pt"),
-            ("5", "best5.pt"),
-        ]
-        multi_inference = MultiModelInference(model_info)
+        multi_inference = MultiModelInference()
         aggregated_results = multi_inference.run_all_inference(preprocessed_image)
         print("YOLOv8 inference completed.")
     except Exception as e:
