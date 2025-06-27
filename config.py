@@ -12,6 +12,7 @@ IMAGE_NAME = "flood3"
 
 # Default model size and number used on startup. These will be overridden
 # when IMPORTANCE values are used to dynamically select models.
+# The following works: nano, small, xlarge
 model_size = "nano"
 model_number = 3
 
