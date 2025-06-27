@@ -163,12 +163,12 @@ def main():
             continue
 
         print("")
-        model_info = [
-            (str(i), f"{config.model_size}/best{i}.pt")
-            for i in range(1, config.model_number+1)
-        ]
+        # model_info = [
+        #     (str(i), f"{config.model_size}/best{i}.pt")
+        #     for i in range(1, config.model_number+1)
+        # ]
         try:
-            agg = MultiModelInference(model_info).run_all_inference(pre, image_name=message["image_name"])
+            agg = MultiModelInference().run_all_inference(pre, image_name=message["image_name"])
         except Exception as e:
             print("Error during inference:", e)
             agg = None
