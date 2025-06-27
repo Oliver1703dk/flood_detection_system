@@ -13,7 +13,8 @@ from cluster_data_receiver.storage.storage_manager import StorageManager
 from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
 from flood_classifier.inference.classifier_both import ClassifierBoth
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
-from yolov8_processor.inference.model_switcher import ModelSwitcher
+from yolov8_processor.inference.multi_model_inference import MultiModelInference
+from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.preprocessing.image_processor import ImageProcessor
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 from flood_classifier.postprocessing.classification_formatter import ClassificationFormatter
@@ -162,12 +163,25 @@ def main():
     
 
     try:
-        # Perform YOLOv8 inference using the ModelSwitcher helper.
-        switcher = ModelSwitcher()
-        switcher.switch_models(config.model_size, config.model_number)
-        aggregated_results = switcher.run_inference(
-            preprocessed_image, image_name=sample_message["image_name"]
-        )
+        # inference = YOLOv8Inference()
+        # results = inference.run_inference(preprocessed_image)
+        # New multi-model call:
+        model_size = config.model_size
+        # model_info = [
+        #     ("1", f"{model_size}/best1.pt"),
+        #     ("2", f"{model_size}/best2.pt"),
+        #     ("3", f"{model_size}/best3.pt"),
+        #     # ("4", f"{model_size}/best4.pt"),
+        #     # ("5", f"{model_size}/best5.pt"),
+        # ]
+        # model_info takes model_number to know how many models to load
+        model_info = [
+            (str(i), f"{model_size}/best{i}.pt") for i in range(1, config.model_number + 1)
+        ]
+        
+
+        multi_inference = MultiModelInference(model_info)
+        aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name=sample_message["image_name"])
 
         print("YOLOv8 inference completed.")
     except Exception as e:
