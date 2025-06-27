@@ -8,10 +8,10 @@ class MultiModelInference:
     def __init__(self, model_info=None):
         """Manage multiple YOLOv8 models and allow dynamic switching."""
         self.models = {}
-        if model_info is not None:
-            self.load_models(model_info)
-        else:
-            self.reload_from_config()
+        # if model_info is not None:
+        #     self.load_models(model_info)
+        # else:
+        self.reload_from_config()
 
     def load_models(self, model_info):
         """Load models from a list of (identifier, filename) tuples."""
