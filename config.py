@@ -14,7 +14,7 @@ IMAGE_NAME = "flood3"
 # when IMPORTANCE values are used to dynamically select models.
 # The following works: nano, small, xlarge
 model_size = "nano"
-model_number = 3
+model_number = 4
 
 # Importance weights used for dynamic model selection. They must sum to 1.
 IMPORTANCE = {
@@ -34,8 +34,8 @@ MQTT_TOPIC = "flood/detection"
 # Path to your test mini-dataset
 TEST_DATASET_DIR = "test_dataset"
 
-IMAGE_MODE = "test_dataset"
-# IMAGE_MODE = "test_image"
+# IMAGE_MODE = "test_dataset"
+IMAGE_MODE = "test_image"
 
 
 
