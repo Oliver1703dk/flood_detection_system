@@ -79,6 +79,7 @@ class MultiModelInference:
         using the YOLOv8FinalClassifier.
         Returns a single list of detection results.
         """
+        print(image_name)
         results_dict = {}
         for model_id, inference_model in self.models.items():
             print(f"Running inference for model {model_id} on image {image_name}...")

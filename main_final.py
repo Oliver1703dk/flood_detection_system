@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 import json
 import base64
+from sqlite3.dbapi2 import Timestamp
 import cv2
 import numpy as np
 
@@ -26,7 +27,7 @@ from flood_classifier.inference.sensor_classifier import SensorClassifier
 import config
 
 
-def process_message(message_payload):
+def process_message(message_payload, image_name=None):
     """
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
@@ -68,7 +69,7 @@ def process_message(message_payload):
 
     try:
         multi_inference = MultiModelInference()
-        aggregated_results = multi_inference.run_all_inference(preprocessed_image)
+        aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name)
         print("YOLOv8 inference completed.")
     except Exception as e:
         print("Error during YOLOv8 inference:", e)
@@ -168,11 +169,16 @@ def main():
         topic=config.MQTT_TOPIC                 # e.g., "your/topic/here"
     )
 
+    # Set correct config variables
+    config.IMAGE_MODE = "MQTT_Final"  # Ensure IMAGE_MODE is set for processing
+
     # Override the on_message callback to use our full pipeline.
     # This custom callback receives the MQTT message and passes its payload to process_message.
     def custom_on_message(client, userdata, msg):
+        config.IMAGE_NAME = "MQTT_Image" + str(Timestamp.now().date()) + str(Timestamp.now().time())  # Set a default image name for testing
+        image_name = config.IMAGE_NAME
         print(f"Message received on topic: {msg.topic}")
-        process_message(msg.payload)
+        process_message(msg.payload, image_name=image_name)
     receiver.on_message = custom_on_message
 
     print("Starting MQTT receiver. Waiting for messages...")

@@ -28,14 +28,15 @@ IMPORTANCE = {
 # For example, MQTT settings or sensor model paths:
 MQTT_BROKER_URL = "localhost"
 MQTT_BROKER_PORT = 1883
-MQTT_TOPIC = "flood/detection"
+MQTT_TOPIC = "sensor/data"
 
 
 # Path to your test mini-dataset
 TEST_DATASET_DIR = "test_dataset"
 
 # IMAGE_MODE = "test_dataset"
-IMAGE_MODE = "test_image"
+# IMAGE_MODE = "test_image"
+IMAGE_MODE = "MQTT_Final"
 
 
 
