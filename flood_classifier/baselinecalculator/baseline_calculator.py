@@ -83,7 +83,7 @@ class BaselineCalculator:
                     except Exception as e:
                         print(f"❌ Error processing {file_path}: {e}")
 
-        if not stable_entries:
+        if not stable_entries or len(stable_entries) < 1:
             print("⚠️ No 'No Flood' entries found. Using existing baseline values.")
             return self.get_baselines()
 
