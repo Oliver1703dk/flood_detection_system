@@ -1,7 +1,7 @@
 import os
 import json
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import config
 
@@ -76,6 +76,8 @@ class BaselineCalculator:
                         if not timestamp_str:
                             continue
                         timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                        if timestamp.tzinfo is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
                         stable_entries.append({
                             "timestamp": timestamp,
                             "sensor_data": data.get("sensor_data", {})
