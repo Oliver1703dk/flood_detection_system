@@ -17,7 +17,13 @@ class MultiModelInference:
         """Load models from a list of (identifier, filename) tuples."""
         self.models = {}
         for model_id, model_filename in model_info:
-            self.models[model_id] = YOLOv8Inference(model_filename=model_filename, identifier=model_id)
+            try:
+                self.models[model_id] = YOLOv8Inference(
+                    model_filename=model_filename, identifier=model_id
+                )
+            except FileNotFoundError as e:
+                # Skip models that are not available and continue loading others.
+                print(f"Warning: {e}. Skipping model {model_id}.")
 
     def _determine_model_params(self):
         """Decide model size and count from the IMPORTANCE weights."""
