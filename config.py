@@ -3,6 +3,10 @@
 # Choose classification mode: "yolo_sensor" or "llm_only"
 CLASSIFICATION_MODE = "yolo_sensor"
 
+# When True, the YOLO+sensor strategy confirms flood predictions using an
+# additional LLM-based image detector.
+USE_LLM_CONFIRMATION = False
+
 # Image size for inference (width, height)
 IMAGE_SIZE = (640, 640)
 # Have this either 'test' or anything else to use a dummy image
