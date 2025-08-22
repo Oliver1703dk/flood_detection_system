@@ -12,10 +12,6 @@ from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
 from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
-from yolov8_processor.inference.multi_model_inference import MultiModelInference
-from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
-from yolov8_processor.preprocessing.image_processor import ImageProcessor
-from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 from flood_classifier.classification.strategies import (
     YoloSensorStrategy,
     LLMOnlyStrategy,
@@ -55,34 +51,44 @@ def process_message(message_payload, image_name=None):
         return
 
     # -------------------------------------------
-    # Image Preprocessing & YOLOv8 Inference
+    # Image Preprocessing & YOLOv8 Inference (only for YOLO+sensor mode)
     # -------------------------------------------
-    image_processor = ImageProcessor()
-    try:
-        preprocessed_image = image_processor.preprocess(message_json["image_data"])
-        print("Image preprocessed for inference.")
-    except Exception as e:
-        print("Error in image preprocessing:", e)
-        return
+    detection_results = []
+    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
+    if classification_mode == "yolo_sensor":
+        from yolov8_processor.preprocessing.image_processor import ImageProcessor
+        from yolov8_processor.inference.multi_model_inference import MultiModelInference
+        from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 
-    try:
-        multi_inference = MultiModelInference()
-        aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name)
-        print("YOLOv8 inference completed.")
-    except Exception as e:
-        print("Error during YOLOv8 inference:", e)
-        aggregated_results = None
+        image_processor = ImageProcessor()
+        try:
+            preprocessed_image = image_processor.preprocess(message_json["image_data"])
+            print("Image preprocessed for inference.")
+        except Exception as e:
+            print("Error in image preprocessing:", e)
+            return
 
-    # Format YOLO detection results.
-    result_formatter = ResultFormatter()
-    detection_results = result_formatter.format_results(aggregated_results) if aggregated_results else []
-    print("\n--- YOLOv8 Detection Results ---")
-    print(detection_results)
+        try:
+            multi_inference = MultiModelInference()
+            aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name)
+            print("YOLOv8 inference completed.")
+        except Exception as e:
+            print("Error during YOLOv8 inference:", e)
+            aggregated_results = None
 
+        result_formatter = ResultFormatter()
+        detection_results = (
+            result_formatter.format_results(aggregated_results)
+            if aggregated_results
+            else []
+        )
+        print("\n--- YOLOv8 Detection Results ---")
+        print(detection_results)
+    else:
+        print("Skipping YOLOv8 inference (LLM-only mode).")
     # -------------------------------------------
     # Flood Classification
     # -------------------------------------------
-    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
     strategy_map = {
         "yolo_sensor": YoloSensorStrategy,
         "llm_only": LLMOnlyStrategy,
