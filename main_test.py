@@ -150,26 +150,30 @@ def main():
         storage_manager.store(message)
         print("✅ Data validated & stored")
 
-        # 2. Preprocess & run YOLOv8
-        try:
-            pre = image_processor.preprocess(message["image_data"])
-        except Exception as e:
-            print("Error in preprocessing:", e)
-            continue
+        # 2. Preprocess & run YOLOv8 (only in YOLO + sensor mode)
+        dets = []
+        if classification_mode == "yolo_sensor":
+            try:
+                pre = image_processor.preprocess(message["image_data"])
+            except Exception as e:
+                print("Error in preprocessing:", e)
+                continue
 
-        print("")
-        # model_info = [
-        #     (str(i), f"{config.model_size}/best{i}.pt")
-        #     for i in range(1, config.model_number+1)
-        # ]
-        try:
-            agg = MultiModelInference().run_all_inference(pre, image_name=message["image_name"])
-        except Exception as e:
-            print("Error during inference:", e)
-            agg = None
+            print("")
+            # model_info = [
+            #     (str(i), f"{config.model_size}/best{i}.pt")
+            #     for i in range(1, config.model_number+1)
+            # ]
+            try:
+                agg = MultiModelInference().run_all_inference(pre, image_name=message["image_name"])
+            except Exception as e:
+                print("Error during inference:", e)
+                agg = None
 
-        dets = result_formatter.format_results(agg) if agg else []
-        print("Detections:", dets)
+            dets = result_formatter.format_results(agg) if agg else []
+            print("Detections:", dets)
+        else:
+            print("Skipping YOLOv8 inference (LLM-only mode).")
 
         # 3. Classify
         strategy_map = {
