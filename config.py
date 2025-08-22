@@ -1,7 +1,7 @@
 # config.py
 
 # Choose classification mode: "yolo_sensor" or "llm_only"
-CLASSIFICATION_MODE = "yolo_sensor"
+CLASSIFICATION_MODE =  "yolo_sensor" # "llm_only"  # "yolo_sensor"
 
 # When True, the YOLO+sensor strategy confirms flood predictions using an
 # additional LLM-based image detector.
@@ -17,7 +17,7 @@ IMAGE_NAME = "flood3"
 # Default model size and number used on startup. These will be overridden
 # when IMPORTANCE values are used to dynamically select models.
 # The following works: nano, small, xlarge
-model_size = "nano"
+model_size = "small"
 model_number = 3
 
 # Importance weights used for dynamic model selection. They must sum to 1.
@@ -38,9 +38,9 @@ MQTT_TOPIC = "sensor/data"
 # Path to your test mini-dataset
 TEST_DATASET_DIR = "test_dataset"
 
-# IMAGE_MODE = "test_dataset"
+IMAGE_MODE = "test_dataset"
 # IMAGE_MODE = "test_image"
-IMAGE_MODE = "MQTT_Final"
+# IMAGE_MODE = "MQTT_Final"
 
 
 

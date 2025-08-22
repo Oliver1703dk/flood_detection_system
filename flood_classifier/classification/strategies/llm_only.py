@@ -19,7 +19,9 @@ class LLMOnlyStrategy(ClassificationStrategy):
         b64_image = message.get("image_data", "")
         try:
             image_bytes = base64.b64decode(b64_image)
+            # print(image_bytes)
         except Exception:
+            print("Failed to decode base64 image data.")
             image_bytes = b""
         image_pred = self.image_classifier.classify_flood(image_bytes)
         return self.formatter.format_output(image_pred)

@@ -116,6 +116,7 @@ def load_test_messages(dataset_dir):
 
 def main():
     classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
+    print(f"Using classification mode: {classification_mode}")
 
     # Instantiate once before looping
     validator = DataValidator()

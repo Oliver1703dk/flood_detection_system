@@ -13,6 +13,10 @@ from __future__ import annotations
 import base64
 import os
 from typing import Optional
+from dotenv import load_dotenv  # Import python-dotenv
+
+# Load .env file
+load_dotenv()
 
 try:  # pragma: no cover - optional dependency
     from openai import OpenAI
@@ -43,7 +47,7 @@ class LLMImageClassifier:
         model: str = "gpt-4.1-mini",
         api_key: Optional[str] = None,
         default_label: int = 0,
-        raise_exceptions: bool = False,
+        raise_exceptions: bool = True,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -59,6 +63,7 @@ class LLMImageClassifier:
                 "openai package is required for LLMImageClassifier"
             )
         if self._client is None:
+            print("Creating OpenAI client...")
             key = self.api_key or os.getenv("OPENAI_API_KEY")
             self._client = OpenAI(api_key=key)
         return self._client
@@ -84,11 +89,16 @@ class LLMImageClassifier:
 
         try:
             client = self._get_client()
+            print("Encoding image to base64...")
             b64_image = base64.b64encode(image_bytes).decode("utf-8")
             prompt_text = (
                 "Classify the flood severity in this image. Respond with one of "
                 "'flood', 'little-flood', or 'no-flood' only."
             )
+
+            print("Sending request to LLM...")
+
+            print("Model:", self.model)
 
             response = client.chat.completions.create(
                 model=self.model,
@@ -107,6 +117,7 @@ class LLMImageClassifier:
                     }
                 ],
             )
+            print("LLM response received: " + response.choices[0].message.content)
 
             # Extract the textual content from the first choice
             output = ""
@@ -131,6 +142,7 @@ class LLMImageClassifier:
             return mapping.get(output, self.default_label)
 
         except Exception:  # pragma: no cover - network errors are hard to unit test
+            print("Error during LLM classification:", str(Exception))
             if self.raise_exceptions:
                 raise
             return self.default_label
