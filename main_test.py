@@ -10,19 +10,15 @@ import glob
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
 from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
-from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
-from flood_classifier.inference.classifier_both import ClassifierBoth
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
 from yolov8_processor.inference.multi_model_inference import MultiModelInference
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.preprocessing.image_processor import ImageProcessor
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
-from flood_classifier.postprocessing.classification_formatter import ClassificationFormatter
-from flood_classifier.model.model_loader import ModelLoader
-from flood_classifier.inference.fusion_strategy import FusionStrategy
-from flood_classifier.inference.image_classifier_2 import EnhancedImageClassifier
-from flood_classifier.inference.sensor_classifier import SensorClassifier
-# Import the CombinedClassifier for one-step classification.
+from flood_classifier.classification.strategies import (
+    YoloSensorStrategy,
+    LLMOnlyStrategy,
+)
 
 
 # Import configuration
@@ -119,7 +115,7 @@ def load_test_messages(dataset_dir):
 
 
 def main():
-    classification_mode = config.CLASSIFICATION_MODE  # "combined" or "fused"
+    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
 
     # Instantiate once before looping
     validator = DataValidator()
@@ -127,7 +123,6 @@ def main():
     saver = DataResultsSaver()
     image_processor = ImageProcessor()
     result_formatter = ResultFormatter()
-    classification_formatter = ClassificationFormatter()
 
     os.makedirs("storage/data",        exist_ok=True)
     os.makedirs("storage/data_results", exist_ok=True)
@@ -177,26 +172,17 @@ def main():
         print("Detections:", dets)
 
         # 3. Classify
-        if classification_mode == "combined":
-            combined = ClassifierBoth(
-                baseline_calculator=BaselineCalculator(),
-                image_classifier=EnhancedImageClassifier()
-            ).classify_flood(
-                sensor_data=message["sensor_data"],
-                detection_data=dets,
-                image_size=config.IMAGE_SIZE,
-                timestamp=datetime.fromisoformat(
-                    message["metadata"]["timestamp"].replace("Z","+00:00")
-                )
-            )
-            code = combined["final_prediction"]
-        else:  # fused
-            sensor_model = ModelLoader().load_sensor_model()
-            s_pred = SensorClassifier().predict(sensor_model, message["sensor_data"])
-            i_pred = EnhancedImageClassifier().classify_flood(dets)
-            code = FusionStrategy().merge_predictions(s_pred, i_pred)
+        strategy_map = {
+            "yolo_sensor": YoloSensorStrategy,
+            "llm_only": LLMOnlyStrategy,
+        }
+        strategy_cls = strategy_map.get(classification_mode)
+        if strategy_cls is None:
+            print("Invalid classification mode, skipping.")
+            continue
 
-        final_result = classification_formatter.format_output(code)
+        strategy = strategy_cls()
+        final_result = strategy.classify(dets, message)
         print("Final result:", final_result)
 
         date_folder = message["metadata"]["timestamp"][:10]

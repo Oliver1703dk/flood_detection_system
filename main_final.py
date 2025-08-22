@@ -11,17 +11,15 @@ from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
 from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
 from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
-from flood_classifier.inference.classifier_both import ClassifierBoth
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
 from yolov8_processor.inference.multi_model_inference import MultiModelInference
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.preprocessing.image_processor import ImageProcessor
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
-from flood_classifier.postprocessing.classification_formatter import ClassificationFormatter
-from flood_classifier.model.model_loader import ModelLoader
-from flood_classifier.inference.fusion_strategy import FusionStrategy
-from flood_classifier.inference.image_classifier_2 import EnhancedImageClassifier
-from flood_classifier.inference.sensor_classifier import SensorClassifier
+from flood_classifier.classification.strategies import (
+    YoloSensorStrategy,
+    LLMOnlyStrategy,
+)
 
 # Import your configuration.
 import config
@@ -84,55 +82,18 @@ def process_message(message_payload, image_name=None):
     # -------------------------------------------
     # Flood Classification
     # -------------------------------------------
-    classification_mode = config.CLASSIFICATION_MODE  # "combined" or "fused"
-    classification_formatter = ClassificationFormatter()
-    
-    if classification_mode == "combined":
-        # Combined classification using both sensor and image data.
-        classifier_both = ClassifierBoth(
-            baseline_calculator=BaselineCalculator(),
-            image_classifier=EnhancedImageClassifier()
-        )
-        try:
-            timestamp = datetime.fromisoformat(
-                message_json["metadata"]["timestamp"].replace("Z", "+00:00")
-            )
-        except Exception as e:
-            print("Timestamp conversion error:", e)
-            return
-
-        combined_result = classifier_both.classify_flood(
-            sensor_data=message_json["sensor_data"],
-            detection_data=detection_results,
-            image_size=config.IMAGE_SIZE,
-            timestamp=timestamp
-        )
-        print("Combined flood classification result:")
-        print(combined_result)
-        final_pred = combined_result["final_prediction"]
-        final_result = classification_formatter.format_output(final_pred)
-    elif classification_mode == "fused":
-        # Fuse separate sensor-based and image-based predictions.
-        try:
-            model_loader = ModelLoader()
-            sensor_model = model_loader.load_sensor_model()
-            sensor_classifier = SensorClassifier()
-            sensor_pred = sensor_classifier.predict(sensor_model, message_json["sensor_data"])
-            print("Sensor-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded):", sensor_pred)
-        except Exception as e:
-            print("Error during sensor classification:", e)
-            sensor_pred = None
-
-        image_classifier = EnhancedImageClassifier()
-        image_pred = image_classifier.classify_flood(detection_results)
-        print("Image-based flood prediction (0: No Flood, 1: Some Water, 2: Flooded):", image_pred)
-
-        fusion = FusionStrategy()
-        final_pred = fusion.merge_predictions(sensor_pred, image_pred)
-        final_result = classification_formatter.format_output(final_pred)
-    else:
+    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
+    strategy_map = {
+        "yolo_sensor": YoloSensorStrategy,
+        "llm_only": LLMOnlyStrategy,
+    }
+    strategy_cls = strategy_map.get(classification_mode)
+    if strategy_cls is None:
         print("Invalid classification mode selected. Exiting processing.")
         return
+
+    strategy = strategy_cls()
+    final_result = strategy.classify(detection_results, message_json)
 
     # Save results.
     saver = DataResultsSaver()

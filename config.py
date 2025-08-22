@@ -1,7 +1,7 @@
 # config.py
 
-# Choose classification mode: "combined" or "fused"
-CLASSIFICATION_MODE = "combined"
+# Choose classification mode: "yolo_sensor" or "llm_only"
+CLASSIFICATION_MODE = "yolo_sensor"
 
 # Image size for inference (width, height)
 IMAGE_SIZE = (640, 640)
