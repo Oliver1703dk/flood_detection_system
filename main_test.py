@@ -1,10 +1,12 @@
 from datetime import datetime
+from dataclasses import asdict, is_dataclass
 import os
 import json
 import base64
 import cv2
 import numpy as np
 import glob
+import copy
 
 # Import modules from your project.
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
@@ -18,7 +20,9 @@ from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 from flood_classifier.classification.strategies import (
     YoloSensorStrategy,
     LLMOnlyStrategy,
+    FSMStrategy,
 )
+from flood_classifier.fsm.flood_fsm import FrameDecision, decision_to_dict
 
 
 # Import configuration
@@ -115,7 +119,7 @@ def load_test_messages(dataset_dir):
 
 
 def main():
-    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
+    classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor", "llm_only", or "fsm"
     print(f"Using classification mode: {classification_mode}")
 
     # Instantiate once before looping
@@ -129,14 +133,22 @@ def main():
     os.makedirs("storage/data_results", exist_ok=True)
 
     total = correct = 0
+    
 
     # choose between test_dataset or the old dummy
+    repeat_count = max(1, getattr(config, "FSM_REPEAT_COUNT", 1))
+
     if config.IMAGE_MODE == "test_dataset":
         print(f"Using test dataset from {config.TEST_DATASET_DIR}")
-        iterator = load_test_messages(config.TEST_DATASET_DIR)
+        base_samples = list(load_test_messages(config.TEST_DATASET_DIR))
     else:
         print("Using simulated message")
-        iterator = [(simulate_message(), None)]
+        base_samples = [(simulate_message(), None)]
+
+    iterator = []
+    for message, label in base_samples:
+        for _ in range(repeat_count):
+            iterator.append((copy.deepcopy(message), label))
 
     # Loop over every JSON+image in your mini-dataset
     for message, gt_label in iterator:
@@ -174,12 +186,13 @@ def main():
             dets = result_formatter.format_results(agg) if agg else []
             print("Detections:", dets)
         else:
-            print("Skipping YOLOv8 inference (LLM-only mode).")
+            print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
 
         # 3. Classify
         strategy_map = {
             "yolo_sensor": YoloSensorStrategy,
             "llm_only": LLMOnlyStrategy,
+            "fsm": FSMStrategy,
         }
         strategy_cls = strategy_map.get(classification_mode)
         if strategy_cls is None:
@@ -188,13 +201,19 @@ def main():
 
         strategy = strategy_cls()
         final_result = strategy.classify(dets, message)
-        print("Final result:", final_result)
+        if isinstance(final_result, FrameDecision):
+            printable_result = decision_to_dict(final_result)
+        elif is_dataclass(final_result):
+            printable_result = asdict(final_result)
+        else:
+            printable_result = final_result
+        print("Final result:", printable_result)
 
         date_folder = message["metadata"]["timestamp"][:10]
         os.makedirs(os.path.join("storage/data_results", date_folder), exist_ok=True)
 
         # 4. Save & compare to ground truth
-        saver.save(message, final_result)
+        saver.save(message, printable_result)
 
         if gt_label is not None:
             pred_is_flood = (final_result != "No Flood")

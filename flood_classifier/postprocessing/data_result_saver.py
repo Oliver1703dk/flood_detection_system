@@ -1,6 +1,21 @@
 import os
 import json
 from datetime import datetime
+from dataclasses import asdict, is_dataclass
+from enum import Enum
+
+def _serialise_result(value):
+    """Return a JSON-serialisable representation of ``value``."""
+    if is_dataclass(value):
+        value = asdict(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, dict):
+        return {k: _serialise_result(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_serialise_result(v) for v in value]
+    return value
+
 
 class DataResultsSaver:
     """
@@ -25,7 +40,7 @@ class DataResultsSaver:
         result_data = {
             "sensor_data": data.get("sensor_data", {}),
             "metadata": data.get("metadata", {}),
-            "classification_result": classification_result
+            "classification_result": _serialise_result(classification_result)
         }
         
         # Use the current UTC time for folder naming and filename.

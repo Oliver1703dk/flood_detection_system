@@ -1,4 +1,5 @@
 from datetime import datetime
+from dataclasses import asdict, is_dataclass
 import os
 import json
 import base64
@@ -15,7 +16,9 @@ from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
 from flood_classifier.classification.strategies import (
     YoloSensorStrategy,
     LLMOnlyStrategy,
+    FSMStrategy,
 )
+from flood_classifier.fsm.flood_fsm import FrameDecision, decision_to_dict
 
 # Import your configuration.
 import config
@@ -85,13 +88,14 @@ def process_message(message_payload, image_name=None):
         print("\n--- YOLOv8 Detection Results ---")
         print(detection_results)
     else:
-        print("Skipping YOLOv8 inference (LLM-only mode).")
+        print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
     # -------------------------------------------
     # Flood Classification
     # -------------------------------------------
     strategy_map = {
         "yolo_sensor": YoloSensorStrategy,
         "llm_only": LLMOnlyStrategy,
+        "fsm": FSMStrategy,
     }
     strategy_cls = strategy_map.get(classification_mode)
     if strategy_cls is None:
@@ -101,9 +105,16 @@ def process_message(message_payload, image_name=None):
     strategy = strategy_cls()
     final_result = strategy.classify(detection_results, message_json)
 
+    if isinstance(final_result, FrameDecision):
+        printable_result = decision_to_dict(final_result)
+    elif is_dataclass(final_result):
+        printable_result = asdict(final_result)
+    else:
+        printable_result = final_result
+
     # Save results.
     saver = DataResultsSaver()
-    saver.save(message_json, final_result)
+    saver.save(message_json, printable_result)
 
     # -------------------------------------------
     # Update the Baselines Using Latest Data
@@ -120,7 +131,7 @@ def process_message(message_payload, image_name=None):
     else:
         print("❌ Baseline update failed (no stable period found).")
     print("\n--- Final Flood Classification ---")
-    print(final_result)
+    print(printable_result)
 
 
 def main():

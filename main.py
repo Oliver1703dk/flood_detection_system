@@ -1,4 +1,5 @@
 from datetime import datetime
+from dataclasses import asdict, is_dataclass
 import os
 import json
 import base64
@@ -15,7 +16,9 @@ from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
 from flood_classifier.classification.strategies import (
     YoloSensorStrategy,
     LLMOnlyStrategy,
+    FSMStrategy,
 )
+from flood_classifier.fsm.flood_fsm import FrameDecision, decision_to_dict
 
 
 # Import configuration
@@ -183,7 +186,7 @@ def main():
         print("\n--- YOLOv8 Detection Results ---")
         print(detection_results)
     else:
-        print("Skipping YOLOv8 inference (LLM-only mode).")
+        print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
 
     # -------------------------------------------
     # 4. Flood Classification
@@ -191,6 +194,7 @@ def main():
     strategy_map = {
         "yolo_sensor": YoloSensorStrategy,
         "llm_only": LLMOnlyStrategy,
+        "fsm": FSMStrategy,
     }
     strategy_cls = strategy_map.get(classification_mode)
     if strategy_cls is None:
@@ -199,10 +203,17 @@ def main():
 
     strategy = strategy_cls()
     final_result = strategy.classify(detection_results, sample_message)
+
+    if isinstance(final_result, FrameDecision):
+        printable_result = decision_to_dict(final_result)
+    elif is_dataclass(final_result):
+        printable_result = asdict(final_result)
+    else:
+        printable_result = final_result
     
     # Save the data and classification results.
     saver = DataResultsSaver()
-    saver.save(sample_message, final_result)
+    saver.save(sample_message, printable_result)
 
     # -------------------------------------------
     # 5. Update the Baseline Using Latest Data
@@ -222,7 +233,7 @@ def main():
         print("❌ Baseline update failed (no stable period found).")
 
     print("\n--- Final Flood Classification ---")
-    print(final_result)
+    print(printable_result)
 
     # # ─── compare to ground truth ───
     # # any non-"No Flood" counts as “flood”

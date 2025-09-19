@@ -1,7 +1,7 @@
 # config.py
 
-# Choose classification mode: "yolo_sensor" or "llm_only"
-CLASSIFICATION_MODE =  "yolo_sensor" # "llm_only"  # "yolo_sensor"
+# Choose classification mode: "yolo_sensor", "llm_only", or "fsm"
+CLASSIFICATION_MODE =  "fsm"  # "fsm" or "llm_only"
 
 # When True, the YOLO+sensor strategy confirms flood predictions using an
 # additional LLM-based image detector.
@@ -12,7 +12,7 @@ IMAGE_SIZE = (640, 640)
 # Have this either 'test' or anything else to use a dummy image
 # IMAGE_MODE = "test"
 # Image name for testing
-IMAGE_NAME = "flood3"
+IMAGE_NAME = "flood-test-ub3"
 
 # Default model size and number used on startup. These will be overridden
 # when IMPORTANCE values are used to dynamically select models.
@@ -38,8 +38,8 @@ MQTT_TOPIC = "sensor/data"
 # Path to your test mini-dataset
 TEST_DATASET_DIR = "test_dataset"
 
-IMAGE_MODE = "test_dataset"
-# IMAGE_MODE = "test_image"
+# IMAGE_MODE = "test_dataset"
+IMAGE_MODE = "test_image"
 # IMAGE_MODE = "MQTT_Final"
 
 
@@ -54,3 +54,20 @@ DEFAULT_BASELINE = {
     "night":     { "temperature_baseline": 22.0, "humidity_baseline": 50.0, "pressure_baseline": 1015.0 },
 }
 
+
+# Default FSM parameters for latency-aware scheduling
+FSM_DEFAULTS = {
+    "threshold_low": 0.35,
+    "threshold_high": 0.65,
+    "frames_high": 3,
+    "frames_low": 3,
+    "frames_ambiguous": 3,
+    "model_cooldown": 5,
+    "flap_window": 8,
+    "resource_skip_ratio": 3,
+    "llm_model": "gpt-4.1-mini",
+}
+
+
+# Number of times to replay the same input when running tests in FSM mode.
+FSM_REPEAT_COUNT = 3
