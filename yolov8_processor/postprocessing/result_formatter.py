@@ -15,9 +15,13 @@ class ResultFormatter:
                 # Lookup the label from the names dictionary.
                 label = names.get(cls_idx, str(cls_idx))
                 if conf >= self.confidence_threshold:
-                    formatted_results.append({
+                    entry = {
                         "label": label,
                         "confidence": conf,
                         "bounding_box": box.xywh.tolist(),
-                    })
+                    }
+                    model_ids = getattr(box, "model_ids", None)
+                    if model_ids:
+                        entry["model_ids"] = sorted(str(mid) for mid in model_ids)
+                    formatted_results.append(entry)
         return formatted_results

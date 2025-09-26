@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv  # Import python-dotenv
 
 # Load .env file
@@ -69,7 +69,13 @@ class LLMImageClassifier:
         return self._client
 
     # ------------------------------------------------------------------
-    def classify_flood(self, image_bytes: bytes) -> int:
+    def classify_flood(
+        self,
+        image_bytes: bytes,
+        sensor_data: Optional[Dict[str, Any]] = None,
+        sensor_baseline: Optional[Dict[str, Any]] = None,
+        sensor_anomalies: Optional[Dict[str, Any]] = None,
+    ) -> int:
         """Classify flood level in an image.
 
         The method base64 encodes the image, sends it to the configured LLM and
@@ -92,28 +98,32 @@ class LLMImageClassifier:
             print("Encoding image to base64...")
             b64_image = base64.b64encode(image_bytes).decode("utf-8")
             prompt_text = (
-                "Classify the flood severity in this image. Respond with one of "
+                "Classify the flood severity in this image and sensor deltas. Respond with one of "
                 "'flood', 'little-flood', or 'no-flood' only."
             )
+            sensor_context = self._build_sensor_context(sensor_data, sensor_baseline, sensor_anomalies)
 
             print("Sending request to LLM...")
 
             print("Model:", self.model)
 
+            content: List[Dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+            if sensor_context:
+                content.append({"type": "text", "text": sensor_context})
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{b64_image}"
+                    },
+                }
+            )
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt_text},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{b64_image}"
-                                },
-                            },
-                        ],
+                        "content": content,
                     }
                 ],
             )
@@ -141,11 +151,57 @@ class LLMImageClassifier:
             }
             return mapping.get(output, self.default_label)
 
-        except Exception:  # pragma: no cover - network errors are hard to unit test
-            print("Error during LLM classification:", str(Exception))
+        except Exception as exc:  # pragma: no cover - network errors are hard to unit test
+            print("Error during LLM classification:", str(exc))
             if self.raise_exceptions:
                 raise
             return self.default_label
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _build_sensor_context(
+        sensor_data: Optional[Dict[str, Any]],
+        sensor_baseline: Optional[Dict[str, Any]],
+        sensor_anomalies: Optional[Dict[str, Any]],
+    ) -> str:
+        if not sensor_data:
+            return ""
+
+        lines: List[str] = []
+        for key, value in sensor_data.items():
+            if value is None:
+                continue
+            baseline_key = f"{key}_baseline"
+            baseline_val = None
+            if sensor_baseline:
+                baseline_val = sensor_baseline.get(baseline_key, sensor_baseline.get(key))
+
+            anomaly_key = f"delta_{key}"
+            delta_val = None
+            if sensor_anomalies:
+                delta_val = sensor_anomalies.get(anomaly_key, sensor_anomalies.get(key))
+            if delta_val is None and baseline_val is not None:
+                try:
+                    delta_val = value - baseline_val
+                except TypeError:
+                    delta_val = None
+
+            summary = f"{key.title()}: current {value}"
+            if baseline_val is not None:
+                summary += f", baseline {baseline_val}"
+            if isinstance(delta_val, (int, float)):
+                summary += f", delta {delta_val:+.2f}"
+            lines.append(summary)
+
+        if not lines:
+            return ""
+
+        context = (
+            "Sensor context (supplemental data):\n"
+            + "\n".join(lines)
+            + "\nUse these readings together with the image when choosing the label."
+        )
+        return context
 
 
 class LLMImageDetector(LLMImageClassifier):
@@ -170,4 +226,3 @@ class LLMImageDetector(LLMImageClassifier):
         """
 
         return super().classify_flood(image_bytes)
-

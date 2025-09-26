@@ -38,13 +38,13 @@ class DummyModelManager:
     def active_tier(self) -> Optional[ModelTier]:
         return self._active_tier
 
-    def infer(self, ctx, requested_tier: ModelTier, frame_index: int):
+    def infer(self, ctx, requested_tier: ModelTier, frame_index: int, fsm_state):
         switched = False
         if self._active_tier is None or requested_tier != self._active_tier:
             switched = True
             self._active_tier = requested_tier
         self.calls.append(requested_tier)
-        return [], self._active_tier, switched
+        return [], self._active_tier, switched, {"backend": "local", "metadata": {}}
 
 
 class CooldownModelManager(DummyModelManager):
@@ -53,7 +53,7 @@ class CooldownModelManager(DummyModelManager):
         self.cooldown = cooldown
         self.last_switch = -cooldown
 
-    def infer(self, ctx, requested_tier: ModelTier, frame_index: int):
+    def infer(self, ctx, requested_tier: ModelTier, frame_index: int, fsm_state):
         switched = False
         if self._active_tier is None:
             self._active_tier = requested_tier
@@ -66,23 +66,28 @@ class CooldownModelManager(DummyModelManager):
                 switched = True
             requested_tier = self._active_tier
         self.calls.append(requested_tier)
-        return [], self._active_tier, switched
+        return [], self._active_tier, switched, {"backend": "local", "metadata": {}}
 
 
 class RecordingModelManager(DummyModelManager):
-    def infer(self, ctx, requested_tier: ModelTier, frame_index: int):
-        detections, tier, switched = super().infer(ctx, requested_tier, frame_index)
-        return detections, tier, switched
+    def infer(self, ctx, requested_tier: ModelTier, frame_index: int, fsm_state):
+        detections, tier, switched, meta = super().infer(ctx, requested_tier, frame_index, fsm_state)
+        return detections, tier, switched, meta
 
 
-class DummyLLM:
-    def __init__(self, response: int = 1):
-        self.calls = 0
-        self.response = response
+class StubDispatcher:
+    def __init__(self, llm_response: Optional[int] = None):
+        self.llm_response = llm_response
+        self.llm_calls = 0
 
-    def classify_flood(self, _image_bytes: bytes) -> int:
-        self.calls += 1
-        return self.response
+    def try_remote_yolo(self, **_):
+        return None
+
+    def run_remote_llm(self, **_):
+        if self.llm_response is None:
+            return None
+        self.llm_calls += 1
+        return {"prediction": self.llm_response, "latency_s": 0.01, "request_id": "stub"}
 
 
 def make_context(
@@ -119,7 +124,7 @@ def test_fsm_state_progression_and_tier_selection():
         ]
     )
     model_manager = DummyModelManager()
-    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, llm_classifier=None)
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=StubDispatcher())
 
     decisions = [
         fsm.next_state(make_context()),
@@ -133,6 +138,38 @@ def test_fsm_state_progression_and_tier_selection():
     assert decisions[1].state == FloodState.S1
     assert decisions[2].model_tier == ModelTier.MEDIUM  # accuracy-heavy S1 prefers medium on slow/stop
     assert decisions[3].state == FloodState.S2
+
+
+def test_ambiguous_state_escalates_to_large_tier():
+    params = FSMParams(
+        frames_high=2,
+        frames_low=2,
+        frames_ambiguous=1,
+        accuracy_weight=0.8,
+        timeliness_weight=0.1,
+        energy_weight=0.1,
+    )
+    classifier = DummyClassifier(
+        [
+            {"final_prediction": 1, "combined_score": 0.45, "image_score": 0.45, "sensor_boost": 0.05},
+            {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.2, "sensor_boost": 0.3},
+            {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
+        ]
+    )
+    model_manager = DummyModelManager()
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=StubDispatcher())
+
+    decision1 = fsm.next_state(make_context(motion="slow"))
+    assert decision1.state == FloodState.S1
+    assert decision1.model_tier == ModelTier.NANO
+
+    decision2 = fsm.next_state(make_context(motion="stop"))
+    assert decision2.state == FloodState.S3
+    assert decision2.model_tier == ModelTier.MEDIUM
+
+    decision3 = fsm.next_state(make_context(motion="stop"))
+    assert decision3.tier_requested == ModelTier.LARGE
+    assert decision3.model_tier == ModelTier.LARGE
 
 
 def test_model_cooldown_enforced():
@@ -154,7 +191,7 @@ def test_model_cooldown_enforced():
         ]
     )
     model_manager = CooldownModelManager(cooldown=params.model_cooldown)
-    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, llm_classifier=None)
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=StubDispatcher())
 
     for _ in range(5):
         fsm.next_state(make_context(motion="stop"))
@@ -166,7 +203,7 @@ def test_model_cooldown_enforced():
 
 
 def test_llm_only_triggers_in_stop_ambiguous_states():
-    params = FSMParams(frames_ambiguous=2)
+    params = FSMParams(frames_ambiguous=1, llm_enabled=True)
     classifier = DummyClassifier(
         [
             {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
@@ -175,8 +212,8 @@ def test_llm_only_triggers_in_stop_ambiguous_states():
         ]
     )
     model_manager = DummyModelManager()
-    llm = DummyLLM(response=2)
-    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, llm_classifier=llm)
+    dispatcher = StubDispatcher(llm_response=2)
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=dispatcher)
 
     first = fsm.next_state(make_context(motion="slow"))
     second = fsm.next_state(make_context(motion="stop"))
@@ -184,7 +221,7 @@ def test_llm_only_triggers_in_stop_ambiguous_states():
 
     assert not first.llm_used
     assert second.llm_used and second.llm_prediction == 2
-    assert llm.calls == 1
+    assert dispatcher.llm_calls == 1
     assert not third.llm_used  # confirmation limited to S1/S3
 
 
@@ -199,7 +236,7 @@ def test_resource_state_drops_tier_and_skips_frames():
         ]
     )
     model_manager = RecordingModelManager()
-    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, llm_classifier=None)
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=StubDispatcher())
 
     # Reach S2 first (two high frames)
     fsm.next_state(make_context(motion="stop"))
@@ -217,6 +254,11 @@ def test_resource_state_drops_tier_and_skips_frames():
     assert skipped.skipped
     assert skipped.state == FloodState.S5
     assert len(model_manager.calls) == calls_after_first  # no inference during skip
+
+    skipped_again = fsm.next_state(make_context(motion="stop", resource=True))
+    assert skipped_again.skipped
+    assert skipped_again.state == FloodState.S5
+    assert len(model_manager.calls) == calls_after_first  # still no inference
 
     resumed = fsm.next_state(make_context(motion="stop", resource=True))
     assert not resumed.skipped
@@ -237,7 +279,7 @@ def test_flapping_moves_to_s3_and_detects_drift():
         ]
     )
     model_manager = DummyModelManager()
-    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, llm_classifier=None)
+    fsm = FloodFSM(params=params, classifier=classifier, model_manager=model_manager, dispatcher=StubDispatcher())
 
     fsm.next_state(make_context())
     fsm.next_state(make_context())

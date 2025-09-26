@@ -16,7 +16,7 @@ IMAGE_NAME = "flood-test-ub3"
 
 # Default model size and number used on startup. These will be overridden
 # when IMPORTANCE values are used to dynamically select models.
-# The following works: nano, small, xlarge
+# Supported sizes: nano, small, medium, large, xlarge
 model_size = "small"
 model_number = 3
 
@@ -71,3 +71,28 @@ FSM_DEFAULTS = {
 
 # Number of times to replay the same input when running tests in FSM mode.
 FSM_REPEAT_COUNT = 5
+
+
+# MQTT-based remote inference configuration. These values control the
+# Pi-to-Jetson request/response loop used to offload heavy models.
+MQTT_INFERENCE_REQUEST_TOPIC = "inference/request"
+MQTT_INFERENCE_RESPONSE_TOPIC = "inference/response"
+MQTT_INFERENCE_HEARTBEAT_TOPIC = "inference/jetson/status"
+MQTT_INFERENCE_QOS = 1
+MQTT_INFERENCE_TIMEOUT = 6.0  # seconds
+MQTT_INFERENCE_MAX_PAYLOAD = 512_000  # bytes before compression
+
+
+# Backend routing policy keyed by FSM state name. "default" is used when the
+# state is not explicitly listed. This keeps routing decisions in config so we
+# can fine-tune behaviour without code edits.
+INFERENCE_ROUTING = {
+    "S0": "local",
+    "S5": "local",
+    "default": "remote",
+}
+
+
+# Default YOLO tier to keep on the Pi. Tiers above this automatically target
+# the Jetson regardless of FSM state. The string must match ModelTier values.
+LOCAL_YOLO_TIER = "nano"

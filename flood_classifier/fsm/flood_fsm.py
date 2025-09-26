@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import config
 
@@ -41,6 +41,15 @@ try:  # pragma: no cover - optional dependency path
 except Exception:  # pragma: no cover - unit tests can inject substitutes
     LLMImageClassifier = None  # type: ignore
 
+try:  # pragma: no cover - optional dependency path
+    from flood_classifier.inference.dispatcher import InferenceDispatcher, MQTTJetsonBackend
+except Exception:  # pragma: no cover - dispatcher relies on optional deps
+    InferenceDispatcher = None  # type: ignore
+    MQTTJetsonBackend = None  # type: ignore
+
+if TYPE_CHECKING:  # pragma: no cover
+    from flood_classifier.inference.dispatcher import InferenceDispatcher
+
 
 class MotionState(Enum):
     """Motion hint provided by upstream sensors."""
@@ -66,14 +75,15 @@ class ModelTier(Enum):
     NANO = "nano"
     SMALL = "small"
     MEDIUM = "medium"
+    LARGE = "large"
 
     def higher(self) -> "ModelTier":
-        order = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM]
+        order = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.LARGE]
         idx = order.index(self)
         return order[min(idx + 1, len(order) - 1)]
 
     def lower(self) -> "ModelTier":
-        order = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM]
+        order = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.LARGE]
         idx = order.index(self)
         return order[max(idx - 1, 0)]
 
@@ -117,6 +127,7 @@ class FSMParams:
             ModelTier.NANO: "nano/best1.pt",
             ModelTier.SMALL: "small/best1.pt",
             ModelTier.MEDIUM: "medium/best1.pt",
+            ModelTier.LARGE: "large/best1.pt",
         }
     )
 
@@ -172,6 +183,9 @@ class FrameDecision:
     skipped: bool
     model_switched: bool
     tier_requested: ModelTier
+    backend: str = "local"
+    backend_info: Dict[str, Any] = field(default_factory=dict)
+    llm_backend_info: Dict[str, Any] = field(default_factory=dict)
 
 
 class ModelManager:
@@ -184,6 +198,7 @@ class ModelManager:
         image_processor: Optional[ImageProcessor] = None,
         result_formatter: Optional[Any] = None,
         multi_model_inference: Optional[Any] = None,
+        dispatcher: Optional["InferenceDispatcher"] = None,
     ) -> None:
         self.params = params
         self._load_model_cb = load_model or self._default_loader
@@ -207,6 +222,7 @@ class ModelManager:
         self._active_model: Any = None
         self._active_tier: Optional[ModelTier] = None
         self._last_switch_frame: int = -params.model_cooldown
+        self._dispatcher = dispatcher
 
     @property
     def active_tier(self) -> Optional[ModelTier]:
@@ -270,8 +286,33 @@ class ModelManager:
         self._last_switch_frame = frame_index
 
     def infer(
-        self, ctx: FrameContext, requested_tier: ModelTier, frame_index: int
-    ) -> Tuple[List[Dict[str, Any]], ModelTier, bool]:
+        self,
+        ctx: FrameContext,
+        requested_tier: ModelTier,
+        frame_index: int,
+        fsm_state: "FloodState",
+    ) -> Tuple[List[Dict[str, Any]], ModelTier, bool, Dict[str, Any]]:
+        backend_meta: Dict[str, Any] = {"backend": "local", "metadata": {}}
+
+        if self._dispatcher is not None:
+            try:
+                remote_result = self._dispatcher.try_remote_yolo(
+                    state=fsm_state,
+                    requested_tier=requested_tier,
+                    frame_index=frame_index,
+                    ctx=ctx,
+                )
+            except Exception as exc:
+                print(f"Remote inference request failed ({exc}); falling back to local model.")
+                remote_result = None
+
+            if remote_result is not None:
+                backend_meta = {
+                    "backend": remote_result.backend,
+                    "metadata": remote_result.metadata,
+                }
+                return remote_result.detections, remote_result.tier, remote_result.switched, backend_meta
+
         switched = False
         if self._active_tier is None:
             self._load_tier(requested_tier, frame_index)
@@ -298,7 +339,7 @@ class ModelManager:
             active_tier = self._active_tier or requested_tier
 
         detections = self._format_detections(results, active_tier)
-        return detections, active_tier, switched
+        return detections, active_tier, switched, backend_meta
 
 
 class FloodFSM:
@@ -309,20 +350,16 @@ class FloodFSM:
         params: Optional[FSMParams] = None,
         classifier: Optional[Any] = None,
         model_manager: Optional[ModelManager] = None,
-        llm_classifier: Optional[Any] = None,
+        dispatcher: Optional["InferenceDispatcher"] = None,
         now_fn: Callable[[], datetime] = datetime.utcnow,
     ) -> None:
         self.params = params or FSMParams()
         self.classifier = classifier or (ClassifierBoth() if ClassifierBoth else None)
         if self.classifier is None:
             raise RuntimeError("ClassifierBoth unavailable; please provide classifier instance")
-        self.model_manager = model_manager or ModelManager(self.params)
-        if self.params.llm_enabled:
-            self.llm_classifier = llm_classifier or (
-                LLMImageClassifier(model=self.params.llm_model) if LLMImageClassifier else None
-            )
-        else:
-            self.llm_classifier = None
+        self.dispatcher = dispatcher or self._build_dispatcher()
+        self.model_manager = model_manager or ModelManager(self.params, dispatcher=self.dispatcher)
+        self.llm_enabled = bool(self.params.llm_enabled and self.dispatcher)
         self.now_fn = now_fn
 
         self.state: FloodState = FloodState.S0
@@ -334,11 +371,29 @@ class FloodFSM:
         self._resource_skip_cursor: int = 0
         self._llm_last_used: Dict[FloodState, int] = {}
 
+    def _build_dispatcher(self) -> Optional["InferenceDispatcher"]:
+        if InferenceDispatcher is None or MQTTJetsonBackend is None:
+            return None
+        try:
+            remote_backend = MQTTJetsonBackend()
+        except Exception as exc:
+            print(f"Remote inference disabled ({exc}). Running local-only mode.")
+            return None
+        return InferenceDispatcher(remote_backend=remote_backend)
+
     def next_state(self, ctx: FrameContext) -> FrameDecision:
         self._frame_index += 1
         motion = ctx.get_motion_state()
         resource_flag = ctx.resource_constrained or bool(ctx.metadata.get("resource_constrained"))
         prev_state = self.state
+
+        timestamp = ctx.resolved_timestamp()
+        baseline_calc = getattr(self.classifier, "baseline_calculator", None)
+        baseline = baseline_calc.get_baseline_for_time(timestamp) if baseline_calc else None
+        if baseline is not None:
+            ctx.metadata["sensor_baseline"] = baseline
+        ctx.metadata.setdefault("sensor_data", ctx.sensor_data)
+        ctx.metadata.setdefault("timestamp", timestamp.isoformat())
 
         if resource_flag and self.state != FloodState.S5:
             self._resource_anchor_state = self.state
@@ -374,9 +429,15 @@ class FloodFSM:
             self._resource_skip_cursor = 1  # current frame processed; start skip cycle next frame
 
         requested_tier = self._choose_tier(motion)
-        detections, model_tier, switched = self.model_manager.infer(ctx, requested_tier, self._frame_index)
+        detections, model_tier, switched, backend_meta = self.model_manager.infer(
+            ctx,
+            requested_tier,
+            self._frame_index,
+            prev_state,
+        )
+        backend_name = backend_meta.get("backend", "local")
+        backend_info = backend_meta.get("metadata", {})
 
-        timestamp = ctx.resolved_timestamp()
         scores = self.classifier.classify_flood(
             sensor_data=ctx.sensor_data,
             detection_data=detections,
@@ -396,27 +457,41 @@ class FloodFSM:
         self._score_history.append(combined)
         flapping = self._is_flapping()
 
+        ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
+
         llm_used = False
         llm_prediction: Optional[int] = None
+        llm_backend_info: Dict[str, Any] = {}
         if (
-            self.llm_classifier
+            self.llm_enabled
+            and self.dispatcher is not None
             and prev_state in (FloodState.S1, FloodState.S3)
             and motion == MotionState.STOP
             and self._counters["ambiguous"] >= self.params.frames_ambiguous
             and self._llm_last_used.get(prev_state, -1) < self._frame_index - self.params.frames_ambiguous
             and self.state != FloodState.S5
         ):
-            image_bytes = ctx.image_bytes()
-            if image_bytes is not None:
-                try:
-                    llm_prediction = int(self.llm_classifier.classify_flood(image_bytes))
+            try:
+                llm_result = self.dispatcher.run_remote_llm(
+                    state=prev_state,
+                    frame_index=self._frame_index,
+                    ctx=ctx,
+                )
+            except Exception as exc:
+                print(f"Remote LLM request failed ({exc}); continuing without LLM confirmation.")
+                llm_result = None
+
+            if llm_result:
+                llm_prediction = llm_result.get("prediction")
+                if llm_prediction is not None:
+                    llm_prediction = int(llm_prediction)
                     llm_used = True
                     self._llm_last_used[prev_state] = self._frame_index
                     prediction = llm_prediction
-                except Exception:
-                    # LLM failures are non-fatal; remain with existing prediction.
-                    llm_used = False
-                    llm_prediction = None
+                    llm_backend_info = {
+                        "latency_s": llm_result.get("latency_s"),
+                        "request_id": llm_result.get("request_id"),
+                    }
 
         next_state = self._determine_next_state(
             current_state=self.state,
@@ -450,6 +525,9 @@ class FloodFSM:
             flapping=flapping,
             skipped=False,
             model_switched=switched,
+            backend=backend_name,
+            backend_info=backend_info,
+            llm_backend_info=llm_backend_info,
         )
         self._last_decision = decision
         return decision
@@ -473,6 +551,9 @@ class FloodFSM:
             skipped=True,
             model_switched=False,
             tier_requested=self.model_manager.active_tier or ModelTier.NANO,
+            backend="local",
+            backend_info={},
+            llm_backend_info={},
         )
 
     def _finalize_decision(
@@ -492,6 +573,9 @@ class FloodFSM:
         flapping: bool,
         skipped: bool,
         model_switched: bool,
+        backend: Optional[str] = None,
+        backend_info: Optional[Dict[str, Any]] = None,
+        llm_backend_info: Optional[Dict[str, Any]] = None,
     ) -> FrameDecision:
         if base_decision and skipped:
             return FrameDecision(
@@ -509,6 +593,9 @@ class FloodFSM:
                 skipped=True,
                 model_switched=model_switched,
                 tier_requested=tier_requested,
+                backend=backend if backend is not None else base_decision.backend,
+                backend_info=backend_info or base_decision.backend_info,
+                llm_backend_info=llm_backend_info or base_decision.llm_backend_info,
             )
         return FrameDecision(
             frame_index=frame_index,
@@ -525,6 +612,9 @@ class FloodFSM:
             skipped=skipped,
             model_switched=model_switched,
             tier_requested=tier_requested,
+            backend=backend or "local",
+            backend_info=backend_info or {},
+            llm_backend_info=llm_backend_info or {},
         )
 
     def _choose_tier(self, motion: MotionState) -> ModelTier:
@@ -693,4 +783,7 @@ def decision_to_dict(decision: FrameDecision) -> Dict[str, Any]:
         "skipped": decision.skipped,
         "model_switched": decision.model_switched,
         "tier_requested": decision.tier_requested.value,
+        "backend": decision.backend,
+        "backend_info": decision.backend_info,
+        "llm_backend_info": decision.llm_backend_info,
     }
