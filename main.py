@@ -3,6 +3,7 @@ from dataclasses import asdict, is_dataclass
 import os
 import json
 import base64
+import copy
 import cv2
 import numpy as np
 import glob
@@ -110,6 +111,7 @@ def main():
     # "yolo_sensor" uses YOLO detections combined with sensor data.
     # "llm_only" relies on image detections only (placeholder for LLM).
     classification_mode = config.CLASSIFICATION_MODE
+    repeat_count = max(1, getattr(config, "FSM_REPEAT_COUNT", 1)) if classification_mode == "fsm" else 1
 
     # -------------------------------------------
     # 1. Simulate Incoming Data
@@ -134,62 +136,38 @@ def main():
 
 
     # -------------------------------------------
-    # 2. Validate and Store Data
+    # 2. Prepare common helpers
     # -------------------------------------------
     validator = DataValidator()
     storage_manager = StorageManager()
-    if validator.validate(sample_message):
-        storage_manager.store(sample_message)
-        print("Data validated and stored successfully.")
-    else:
-        print("Data validation failed. Exiting simulation.")
-        return
+    saver = DataResultsSaver()
+    baseline_calculator = BaselineCalculator(
+        results_dir="storage/data_results",
+        baseline_file="storage/sensor_baselines.json",
+        tau=12
+    )
 
-    # -------------------------------------------
-    # 3. Image Preprocessing & YOLOv8 Inference (only for YOLO+sensor mode)
-    # -------------------------------------------
-    detection_results = []
+    # Preload YOLO utilities if needed.
     if classification_mode == "yolo_sensor":
         from yolov8_processor.preprocessing.image_processor import ImageProcessor
         from yolov8_processor.inference.multi_model_inference import MultiModelInference
         from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 
         image_processor = ImageProcessor()
-        try:
-            preprocessed_image = image_processor.preprocess(sample_message["image_data"])
-            print("Image preprocessed for inference.")
-        except Exception as e:
-            print("Error in image preprocessing:", e)
-            return
-
-        try:
-            model_size = config.model_size
-            model_info = [
-                (str(i), f"{model_size}/best{i}.pt")
-                for i in range(1, config.model_number + 1)
-            ]
-            multi_inference = MultiModelInference(model_info)
-            aggregated_results = multi_inference.run_all_inference(
-                preprocessed_image, image_name=sample_message["image_name"]
-            )
-            print("YOLOv8 inference completed.")
-        except Exception as e:
-            print("Error during YOLOv8 inference:", e)
-            aggregated_results = None
-
+        model_size = config.model_size
+        model_info = [
+            (str(i), f"{model_size}/best{i}.pt")
+            for i in range(1, config.model_number + 1)
+        ]
+        multi_inference = MultiModelInference(model_info)
         result_formatter = ResultFormatter()
-        detection_results = (
-            result_formatter.format_results(aggregated_results)
-            if aggregated_results
-            else []
-        )
-        print("\n--- YOLOv8 Detection Results ---")
-        print(detection_results)
     else:
-        print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
+        image_processor = None
+        multi_inference = None
+        result_formatter = None
 
     # -------------------------------------------
-    # 4. Flood Classification
+    # 3. Flood Classification Strategy
     # -------------------------------------------
     strategy_map = {
         "yolo_sensor": YoloSensorStrategy,
@@ -202,38 +180,78 @@ def main():
         return
 
     strategy = strategy_cls()
-    final_result = strategy.classify(detection_results, sample_message)
 
-    if isinstance(final_result, FrameDecision):
-        printable_result = decision_to_dict(final_result)
-    elif is_dataclass(final_result):
-        printable_result = asdict(final_result)
-    else:
-        printable_result = final_result
-    
-    # Save the data and classification results.
-    saver = DataResultsSaver()
-    saver.save(sample_message, printable_result)
+    for iteration in range(1, repeat_count + 1):
+        print(f"\n=== Iteration {iteration}/{repeat_count} ===")
+        current_message = copy.deepcopy(sample_message)
+        current_metadata = current_message.setdefault("metadata", {})
+        current_metadata.setdefault("fsm_iteration", iteration)
 
-    # -------------------------------------------
-    # 5. Update the Baseline Using Latest Data
-    # -------------------------------------------
-    baseline_calculator = BaselineCalculator(
-        results_dir="storage/data_results",
-        baseline_file="storage/sensor_baselines.json",
-        tau=12
-    )
+        # -------------------------------------------
+        # Validate & Store
+        # -------------------------------------------
+        if not validator.validate(current_message):
+            print("❌ Validation failed, skipping iteration.")
+            continue
+        storage_manager.store(current_message)
+        print("✅ Data validated & stored")
 
-    print("\n🔄 Updating sensor baselines...")
-    current_baselines = baseline_calculator.update_baselines()
+        # -------------------------------------------
+        # Optional YOLO preprocessing (yolo_sensor mode only)
+        # -------------------------------------------
+        detection_results = []
+        if classification_mode == "yolo_sensor" and image_processor and multi_inference and result_formatter:
+            try:
+                preprocessed_image = image_processor.preprocess(current_message["image_data"])
+                print("Image preprocessed for inference.")
+            except Exception as e:
+                print("Error in image preprocessing:", e)
+                continue
 
-    if current_baselines:
-        print("✅ Updated Baselines:", current_baselines)
-    else:
-        print("❌ Baseline update failed (no stable period found).")
+            try:
+                aggregated_results = multi_inference.run_all_inference(
+                    preprocessed_image,
+                    image_name=current_message.get("image_name", config.IMAGE_NAME)
+                )
+                print("YOLOv8 inference completed.")
+            except Exception as e:
+                print("Error during YOLOv8 inference:", e)
+                aggregated_results = None
 
-    print("\n--- Final Flood Classification ---")
-    print(printable_result)
+            detection_results = (
+                result_formatter.format_results(aggregated_results)
+                if aggregated_results
+                else []
+            )
+            print("\n--- YOLOv8 Detection Results ---")
+            print(detection_results)
+        elif classification_mode != "yolo_sensor":
+            print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
+
+        # -------------------------------------------
+        # Classify
+        # -------------------------------------------
+        final_result = strategy.classify(detection_results, current_message)
+
+        if isinstance(final_result, FrameDecision):
+            printable_result = decision_to_dict(final_result)
+        elif is_dataclass(final_result):
+            printable_result = asdict(final_result)
+        else:
+            printable_result = final_result
+
+        saver.save(current_message, printable_result)
+
+        print("\n🔄 Updating sensor baselines...")
+        current_baselines = baseline_calculator.update_baselines()
+
+        if current_baselines:
+            print("✅ Updated Baselines:", current_baselines)
+        else:
+            print("❌ Baseline update failed (no stable period found).")
+
+        print("\n--- Flood Classification Result ---")
+        print(printable_result)
 
     # # ─── compare to ground truth ───
     # # any non-"No Flood" counts as “flood”

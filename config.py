@@ -62,7 +62,7 @@ FSM_DEFAULTS = {
     "frames_high": 3,
     "frames_low": 3,
     "frames_ambiguous": 3,
-    "model_cooldown": 5,
+    "model_cooldown": 1,
     "flap_window": 8,
     "resource_skip_ratio": 3,
     "llm_model": "gpt-4.1-mini",
@@ -70,4 +70,4 @@ FSM_DEFAULTS = {
 
 
 # Number of times to replay the same input when running tests in FSM mode.
-FSM_REPEAT_COUNT = 3
+FSM_REPEAT_COUNT = 5

@@ -97,7 +97,7 @@ class FSMParams:
     frames_high: int = 3  # M consecutive high frames required for flood
     frames_low: int = 3  # N consecutive low frames required to clear flood
     frames_ambiguous: int = 3  # K consecutive ambiguous frames for escalation
-    model_cooldown: int = 5  # C frames between YOLO model switches
+    model_cooldown: int = 1  # C frames between YOLO model switches
     flap_window: int = 8  # W window for oscillation detection
     resource_skip_ratio: int = 3  # Process 1 of N frames while constrained
     accuracy_weight: float = field(
