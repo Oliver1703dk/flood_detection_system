@@ -74,6 +74,10 @@ def simulate_message():
             "camera_id": "CAM123"
         }
     }
+    if config.TEST_MOTION is not None:
+        message["metadata"]["motion"] = config.TEST_MOTION
+    if getattr(config, "TEST_RESOURCE_CONSTRAINED", False):
+        message["metadata"]["resource_constrained"] = bool(config.TEST_RESOURCE_CONSTRAINED)
     return message
 
 
@@ -114,6 +118,13 @@ def load_test_messages(dataset_dir):
                 "camera_id": sample.get("camera_id", os.path.splitext(sample["image"])[0])
             }
         }
+
+        meta = message.get("metadata", {})
+        if config.TEST_MOTION is not None and "motion" not in meta:
+            meta["motion"] = config.TEST_MOTION
+        if getattr(config, "TEST_RESOURCE_CONSTRAINED", False) and "resource_constrained" not in meta:
+            meta["resource_constrained"] = bool(config.TEST_RESOURCE_CONSTRAINED)
+        message["metadata"] = meta
 
         yield message, sample["label"]
 

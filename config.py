@@ -5,7 +5,7 @@ CLASSIFICATION_MODE =  "fsm"  # "fsm" or "llm_only"
 
 # When True, the YOLO+sensor strategy confirms flood predictions using an
 # additional LLM-based image detector.
-USE_LLM_CONFIRMATION = False
+USE_LLM_CONFIRMATION = True
 
 # Image size for inference (width, height)
 IMAGE_SIZE = (640, 640)
@@ -41,6 +41,13 @@ TEST_DATASET_DIR = "test_dataset"
 # IMAGE_MODE = "test_dataset"
 IMAGE_MODE = "test_image"
 # IMAGE_MODE = "MQTT_Final"
+
+# Default motion hint for simulated/test payloads. Use "fast", "slow", "stop" or None.
+TEST_MOTION = "stop"
+
+# When True, mark simulated/test payloads as resource constrained.
+TEST_RESOURCE_CONSTRAINED = False
+
 
 
 
