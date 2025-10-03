@@ -106,7 +106,7 @@ INFERENCE_ROUTING = {
 
 # Default YOLO tier to keep on the Pi. Tiers above this automatically target
 # the Jetson regardless of FSM state. The string must match ModelTier values.
-LOCAL_YOLO_TIER = "nano"
+LOCAL_YOLO_TIER = "small"
 
 
 
