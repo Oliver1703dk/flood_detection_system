@@ -99,35 +99,29 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     with _YOLO_LOCK:
         models = _YOLO_MODELS.get(tier_value)
-        if models is None:
+        if not models:
+            _log(f"Loading YOLO models for tier '{tier_value}'")
             model_filenames = _discover_model_filenames(tier_value)
-            _log(f"Loading {len(model_filenames)} YOLO checkpoint(s) for tier '{tier_value}'")
-            models = [
-                YOLOv8Inference(
-                    model_filename=filename,
-                    identifier=f"{tier_value}-{Path(filename).stem}"
-                )
-                for filename in model_filenames
-            ]
+            models = []
+            for filename in model_filenames:
+                model_path = _YOLO_MODEL_ROOT / filename
+                if not model_path.exists():
+                    _log(f"Warning: model file '{model_path}' not found; skipping")
+                    continue
+                models.append(YOLOv8Inference(str(model_path)))
+            if not models:
+                raise FileNotFoundError(f"No valid YOLO models found for tier '{tier_value}'")
             _YOLO_MODELS[tier_value] = models
+            _log(f"Loaded {len(models)} YOLO model(s) for tier '{tier_value}'")
 
-    if not models:
-        raise RuntimeError(f"No models available for tier '{tier_value}'")
+        results_by_model = {}
+        for idx, model in enumerate(models):
+            results_by_model[idx] = model.run_inference(image)
 
-    image_name = payload.get("image_name") or payload.get("metadata", {}).get("image_name")
-    image_name = image_name or f"remote-{tier_value}-{int(time.time()*1000)}"
-
-    _log(f"Running YOLO inference for tier '{tier_value}' on image '{image_name}' with {len(models)} model(s)")
-    results_by_model: Dict[str, Any] = {}
-    for model in models:
-        model_results = model.run_inference(image, image_name=image_name)
-        key = model.identifier or tier_value
-        results_by_model[key] = model_results
-
-    if len(results_by_model) > 1:
-        results = _YOLO_AGGREGATOR.classify(results_by_model)
-    else:
-        results = next(iter(results_by_model.values()))
+        if len(results_by_model) > 1:
+            results = _YOLO_AGGREGATOR.aggregate_results(results_by_model)
+        else:
+            results = next(iter(results_by_model.values()))
 
     formatted = _RESULT_FORMATTER.format_results(results)
 
@@ -137,6 +131,7 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         if tier_value not in model_ids:
             model_ids.append(tier_value)
 
+    image_name = payload.get("metadata", {}).get("image_name", "unknown")
     _log(f"YOLO inference complete for image '{image_name}'; {len(formatted)} detection(s) produced")
     return {
         "detections": formatted,
@@ -181,15 +176,11 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             sensor_anomalies=sensor_anomalies,
         )
 
-    _log("LLM inference complete")
-    return {
-        "prediction": int(prediction),
-        "model": getattr(_LLM_CLASSIFIER, "model_name", getattr(_LLM_CLASSIFIER, "model", None)),
-    }
+    return {"prediction": prediction}
 
 
 class JetsonWorker:
-    def __init__(self) -> None:
+    def __init__(self, preload_llm: bool = True) -> None:
         client_id = f"jetson-worker-{int(time.time())}"
         self.client = mqtt.Client(client_id=client_id)
         self.client.enable_logger()
@@ -200,6 +191,7 @@ class JetsonWorker:
         self._stop = threading.Event()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_announced = False
+        self.preload_llm = preload_llm
 
     def start(self) -> None:
         _log("Starting Jetson worker threads")
@@ -207,8 +199,26 @@ class JetsonWorker:
         self.client.loop_start()
         self.client.subscribe(REQUEST_TOPIC, qos=QOS)
         _log(f"Subscribed to request topic '{REQUEST_TOPIC}' (QoS {QOS})")
+        
+        # Pre-load LLM model after MQTT is ready
+        if self.preload_llm:
+            _log("Pre-loading LLM model (this may take 15-20 seconds)...")
+            self._preload_llm()
+            _log("✓ LLM model pre-loaded and ready for inference requests!")
+        
         while not self._stop.is_set():
             time.sleep(0.1)
+
+    def _preload_llm(self) -> None:
+        """Pre-load the LLM model during startup."""
+        global _LLM_CLASSIFIER
+        with _LLM_LOCK:
+            if _LLM_CLASSIFIER is None:
+                _LLM_CLASSIFIER = create_llm_classifier(
+                    raise_exceptions=False,
+                )
+                # Trigger model initialization
+                _LLM_CLASSIFIER._initialize_model()
 
     def stop(self) -> None:
         _log("Stopping Jetson worker")
@@ -262,7 +272,7 @@ class JetsonWorker:
 
 def main() -> None:
     _log("Launching Jetson inference worker")
-    worker = JetsonWorker()
+    worker = JetsonWorker(preload_llm=True)  # Set to False to disable pre-loading
 
     def handle_signal(_sig, _frame):
         _log("Received shutdown signal; stopping worker")

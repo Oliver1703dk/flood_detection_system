@@ -114,7 +114,8 @@ LOCAL_YOLO_TIER = "small"
 USE_LOCAL_LLM = True  # Set to True to use local VLM instead of OpenAI API
 
 # Model options:
-# - "VILA1.5-3b" (recommended for Jetson, ~3GB VRAM)
+
+# - "Efficient-Large-Model/VILA1.5-3b" (recommended for Jetson, ~3GB VRAM)
 LOCAL_LLM_MODEL = str(PROJECT_ROOT / "jetson_worker" / "llm" / "models" / "VILA1.5-3b")
 
 # Use 4-bit quantization to reduce memory usage (highly recommended for Jetson)
