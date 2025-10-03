@@ -24,7 +24,6 @@ if PROJECT_ROOT.as_posix() not in sys.path:
 
 import config
 from flood_classifier.fsm.flood_fsm import FSMParams, ModelTier
-from flood_classifier.inference.llm_image_classifier import LLMImageClassifier
 from yolov8_processor.classifier.yolov8_final_classifier import YOLOv8FinalClassifier
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
@@ -54,7 +53,7 @@ _YOLO_MODEL_ROOT = Path(__file__).resolve().parent.parent / "yolov8_processor" /
 _YOLO_MODELS: Dict[str, List[YOLOv8Inference]] = {}
 _YOLO_LOCK = threading.Lock()
 _YOLO_AGGREGATOR = YOLOv8FinalClassifier()
-_LLM_CLASSIFIER: Optional[LLMImageClassifier] = None
+_LLM_CLASSIFIER: Optional[Any] = None
 _LLM_LOCK = threading.Lock()
 
 
@@ -147,6 +146,9 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+from jetson_worker.llm.llm_factory import create_llm_classifier
+
+# Replace the run_llm_inference function:
 def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Mirror the Pi's LLM image classifier for confirmation requests."""
 
@@ -156,7 +158,7 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         image_bytes = base64.b64decode(image_b64)
-    except Exception as exc:  # pragma: no cover - malformed payload
+    except Exception as exc:
         raise ValueError("Invalid base64 image data for LLM inference") from exc
 
     sensor_data = payload.get("sensor_data") or payload.get("metadata", {}).get("sensor_data")
@@ -166,10 +168,9 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     with _LLM_LOCK:
         global _LLM_CLASSIFIER
         if _LLM_CLASSIFIER is None:
-            llm_model = _FSM_PARAMS.llm_model
-            _log(f"Initializing LLM image classifier '{llm_model}'")
-            _LLM_CLASSIFIER = LLMImageClassifier(
-                model=llm_model,
+            _log("Initializing LLM image classifier")
+            # Use factory to create the appropriate classifier
+            _LLM_CLASSIFIER = create_llm_classifier(
                 raise_exceptions=False,
             )
 
@@ -183,7 +184,7 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     _log("LLM inference complete")
     return {
         "prediction": int(prediction),
-        "model": _LLM_CLASSIFIER.model if _LLM_CLASSIFIER else None,
+        "model": getattr(_LLM_CLASSIFIER, "model_name", getattr(_LLM_CLASSIFIER, "model", None)),
     }
 
 

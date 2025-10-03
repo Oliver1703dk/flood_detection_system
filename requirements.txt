@@ -39,3 +39,9 @@ tzdata==2024.2
 ultralytics==8.3.64
 ultralytics-thop==2.0.14
 urllib3==2.3.0
+# For local VLM inference
+transformers>=4.36.0
+accelerate>=0.25.0
+bitsandbytes>=0.41.0  # For 4-bit quantization
+sentencepiece>=0.1.99
+protobuf>=3.20.0
