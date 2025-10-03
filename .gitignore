@@ -1,3 +1,6 @@
+# LLM model
+jetson_worker/llm/models/
+
 # Storage folder
 storage/
 test_dataset/

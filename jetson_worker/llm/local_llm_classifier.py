@@ -39,7 +39,7 @@ class LocalVLMClassifier:
 
     def __init__(
         self,
-        model_name: str = "Efficient-Large-Model/VILA1.5-3b",
+        model_name: str = "VILA1.5-3b",
         device: Optional[str] = None,
         default_label: int = 0,
         raise_exceptions: bool = False,
