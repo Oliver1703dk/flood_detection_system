@@ -192,14 +192,19 @@ class JetsonWorker:
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_announced = False
         self.preload_llm = preload_llm
+        self._job_lock = threading.Lock()
+        self._job_event = threading.Event()
+        self._latest_job: Optional[Dict[str, Any]] = None
+        self._job_thread = threading.Thread(target=self._job_loop, name="jetson-job-worker", daemon=True)
 
     def start(self) -> None:
         _log("Starting Jetson worker threads")
         self._heartbeat_thread.start()
+        self._job_thread.start()
         self.client.loop_start()
         self.client.subscribe(REQUEST_TOPIC, qos=QOS)
         _log(f"Subscribed to request topic '{REQUEST_TOPIC}' (QoS {QOS})")
-        
+
         # Pre-load LLM model after MQTT is ready
         if self.preload_llm:
             _log("Pre-loading LLM model (this may take 15-20 seconds)...")
@@ -223,8 +228,10 @@ class JetsonWorker:
     def stop(self) -> None:
         _log("Stopping Jetson worker")
         self._stop.set()
+        self._job_event.set()
         self.client.loop_stop()
         self.client.disconnect()
+        self._job_thread.join(timeout=5.0)
 
     def _on_connect(self, client, _userdata, _flags, rc):
         if rc == 0:
@@ -243,7 +250,47 @@ class JetsonWorker:
         job_id = payload.get("id")
         task = payload.get("task")
 
-        _log(f"Received task '{task}' (job id: {job_id})")
+        _log(f"Received task '{task}' (job id: {job_id}); queueing for worker thread")
+        superseded = self._enqueue_job(payload)
+        if superseded is not None:
+            self._publish_superseded(superseded)
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.is_set():
+            self.client.publish(HEARTBEAT_TOPIC, json.dumps({"ts": time.time()}), qos=0, retain=True)
+            if not self._heartbeat_announced:
+                _log(f"Heartbeat thread active; publishing status beacons to '{HEARTBEAT_TOPIC}' every {HEARTBEAT_INTERVAL}s")
+                self._heartbeat_announced = True
+            time.sleep(HEARTBEAT_INTERVAL)
+
+    def _enqueue_job(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self._job_lock:
+            superseded = self._latest_job
+            self._latest_job = payload
+            self._job_event.set()
+            return superseded
+
+    def _job_loop(self) -> None:
+        while True:
+            if self._stop.is_set() and not self._job_event.is_set():
+                break
+            if not self._job_event.wait(timeout=0.5):
+                continue
+            with self._job_lock:
+                job = self._latest_job
+                self._latest_job = None
+                self._job_event.clear()
+            if job is None:
+                if self._stop.is_set():
+                    break
+                continue
+            self._process_payload(job)
+
+    def _process_payload(self, payload: Dict[str, Any]) -> None:
+        job_id = payload.get("id")
+        task = payload.get("task")
+
+        _log(f"Processing task '{task}' (job id: {job_id})")
         response: Dict[str, Any] = {"id": job_id, "error": None}
         try:
             if task == "yolo":
@@ -258,16 +305,17 @@ class JetsonWorker:
             _log(f"Task '{task}' failed: {exc}")
 
         response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
-        client.publish(response_topic, json.dumps(response), qos=QOS)
+        self.client.publish(response_topic, json.dumps(response), qos=QOS)
         _log(f"Published response for job id {job_id} to '{response_topic}'")
 
-    def _heartbeat_loop(self) -> None:
-        while not self._stop.is_set():
-            self.client.publish(HEARTBEAT_TOPIC, json.dumps({"ts": time.time()}), qos=0, retain=True)
-            if not self._heartbeat_announced:
-                _log(f"Heartbeat thread active; publishing status beacons to '{HEARTBEAT_TOPIC}' every {HEARTBEAT_INTERVAL}s")
-                self._heartbeat_announced = True
-            time.sleep(HEARTBEAT_INTERVAL)
+    def _publish_superseded(self, payload: Dict[str, Any]) -> None:
+        job_id = payload.get("id")
+        if not job_id:
+            return
+        response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}"
+        response = {"id": job_id, "error": "superseded by newer request"}
+        self.client.publish(response_topic, json.dumps(response), qos=QOS)
+        _log(f"Superseded job {job_id}; notified publisher")
 
 
 def main() -> None:

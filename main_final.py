@@ -4,6 +4,8 @@ import os
 import json
 import base64
 from sqlite3.dbapi2 import Timestamp
+import threading
+from typing import Optional, Tuple
 import cv2
 import numpy as np
 
@@ -22,6 +24,31 @@ from flood_classifier.fsm.flood_fsm import FrameDecision, decision_to_dict
 
 # Import your configuration.
 import config
+
+
+class LatestPayloadBuffer:
+    """Keep only the most recent MQTT payload for processing."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._latest: Optional[Tuple[str, bytes]] = None
+        self._available = threading.Event()
+
+    def offer(self, topic: str, payload: bytes) -> Optional[Tuple[str, bytes]]:
+        with self._lock:
+            superseded = self._latest
+            self._latest = (topic, payload)
+            self._available.set()
+            return superseded
+
+    def take(self, timeout: float = 0.5) -> Optional[Tuple[str, bytes]]:
+        if not self._available.wait(timeout=timeout):
+            return None
+        with self._lock:
+            item = self._latest
+            self._latest = None
+            self._available.clear()
+            return item
 
 
 def process_message(message_payload, image_name=None):
@@ -142,25 +169,54 @@ def main():
     """
     # Instantiate your MQTTReceiver with the broker configuration.
     receiver = MQTTReceiver(
-        broker_url=config.MQTT_BROKER_URL,    # e.g., "192.168.1.100" or a broker domain
-        broker_port=config.MQTT_BROKER_PORT,    # e.g., 1883
-        topic=config.MQTT_TOPIC                 # e.g., "your/topic/here"
+        broker_url=config.MQTT_BROKER_URL,
+        broker_port=config.MQTT_BROKER_PORT,
+        topic=config.MQTT_TOPIC,
     )
 
-    # Set correct config variables
-    config.IMAGE_MODE = "MQTT_Final"  # Ensure IMAGE_MODE is set for processing
+    config.IMAGE_MODE = "MQTT_Final"
 
-    # Override the on_message callback to use our full pipeline.
-    # This custom callback receives the MQTT message and passes its payload to process_message.
-    def custom_on_message(client, userdata, msg):
-        config.IMAGE_NAME = "MQTT_Image" + str(Timestamp.now().date()) + str(Timestamp.now().time())  # Set a default image name for testing
-        image_name = config.IMAGE_NAME
+    latest_messages = LatestPayloadBuffer()
+    stop_event = threading.Event()
+
+    def custom_on_message(_client, _userdata, msg):
         print(f"Message received on topic: {msg.topic}")
-        process_message(msg.payload, image_name=image_name)
+        superseded = latest_messages.offer(msg.topic, msg.payload)
+        if superseded is not None:
+            print("Superseded older collector payload; keeping newest frame only.")
+
     receiver.on_message = custom_on_message
 
+    def worker_loop() -> None:
+        while not stop_event.is_set():
+            item = latest_messages.take()
+            if item is None:
+                continue
+            _, payload = item
+            try:
+                config.IMAGE_NAME = (
+                    "MQTT_Image"
+                    + str(Timestamp.now().date())
+                    + str(Timestamp.now().time())
+                )
+            except Exception:
+                config.IMAGE_NAME = "MQTT_Image"
+            try:
+                process_message(payload, image_name=config.IMAGE_NAME)
+            except Exception as exc:
+                print(f"Error processing buffered message: {exc}")
+
+    worker_thread = threading.Thread(target=worker_loop, name="processor-worker", daemon=True)
+    worker_thread.start()
+
     print("Starting MQTT receiver. Waiting for messages...")
-    receiver.start()
+    try:
+        receiver.start()
+    except KeyboardInterrupt:
+        print("Stopping MQTT receiver (KeyboardInterrupt)")
+    finally:
+        stop_event.set()
+        worker_thread.join(timeout=2.0)
 
 
 if __name__ == "__main__":
