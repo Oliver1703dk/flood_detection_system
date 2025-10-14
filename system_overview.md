@@ -1,34 +1,152 @@
 # Flood Detection System Overview
 
-This document summarizes the major components and data flow in the distributed
-flood detection setup. The architecture spans two Raspberry Pi devices and an
-NVIDIA Jetson, coordinated via MQTT messaging.
+This document summarizes the production architecture for the distributed flood
+detection system spanning two Raspberry Pi devices and an NVIDIA Jetson. The
+components coordinate via MQTT messaging and share a common storage layout and
+configuration surface.
 
 ## 1. Gathering Pi (Sensor & Image Capture)
-- Executes the edge data processor (see `main.py`) which reloads `.env` secrets, reads feature flags from `config.py`, and instantiates handlers for the camera, Netatmo sensors (or simulators), metadata enrichment, and optional MQTT transport.
-- The Netatmo integration captures barometric pressure, temperature, humidity, CO₂ concentration, and rainfall metrics; simulation mode synthesizes plausible values within configured bounds so downstream logic receives realistic payloads even without hardware.
-- On each acquisition cycle the camera handler captures or synthesizes an image, the sensor handler pulls Netatmo readings, and the metadata handler augments the payload with timestamps, GPS coordinates, motion hints, and resource flags sourced from configuration.
-- `edge_data_collector.formatter.format_data` normalizes motion/resource hints, injects camera identifiers, converts the image to base64-encoded JPEG, and merges any caller-provided metadata. The result matches the schema expected by the downstream FSM (`image_data`, `sensor_data`, `metadata`).
-- When `USE_MQTT` is enabled, `edge_data_sender.transmission.mqtt_handler.MqttHandler` publishes the serialized payload to the shared broker/topic; otherwise the system prints the payload for inspection.
-- Support scripts manage Netatmo OAuth token refresh, persist updated credentials back to `.env`, and expose utilities to enumerate available sensors. Captured images (real or simulated) are stored under `edge_data_collector/camera/images` for debugging or replay.
-
+- Runs `main_final.py` in collector mode to refresh `.env` secrets, read feature flags from `config.py`, and instantiate camera, Netatmo sensor (or simulator), metadata enrichment, and MQTT handlers.
+- Netatmo integration captures barometric pressure, temperature, humidity, CO2, and rainfall metrics; simulation mode produces bounded synthetic readings so downstream logic always receives realistic payloads.
+- Each acquisition cycle captures or synthesizes an image, gathers sensor readings, and enriches metadata with timestamps, GPS, motion hints, and resource flags.
+- `edge_data_collector.formatter.format_data` normalizes metadata, injects camera identifiers, encodes imagery as base64 JPEG, and packages the payload as `{image_data, sensor_data, metadata}` for the Processing Pi.
+- When `USE_MQTT` is enabled, `edge_data_sender.transmission.mqtt_handler.MqttHandler` publishes the payload to the shared broker/topic; otherwise the payload prints for manual inspection.
+- Support scripts refresh Netatmo OAuth tokens, persist credentials to `.env`, and retain captured images under `edge_data_collector/camera/images` for replay.
 
 ## 2. Processing Pi: Core Data Pipeline and Decision Logic
-The Processing Pi handles incoming data streams and orchestrates flood detection decisions. Key steps include:
+The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives the finite-state decision engine, and persists results.
 
-- **Payload Ingestion and Preparation**: MQTT payloads are buffered, decoded, validated, and archived. Only the freshest frame is retained using `LatestPayloadBuffer` (main_final.py:29, main_final.py:74).
-- **Data Normalization**: `FSMStrategy` transforms each payload into a standardized `FrameContext` via `FSMStrategy.classify`, preserving base64 imagery, sensor payloads, motion/resource hints, and timestamps for consistent FSM inputs (flood_classifier/classification/strategies/fsm.py:18, flood_classifier/classification/strategies/fsm.py:33).
-- **State Orchestration**: `FloodFSM` provides a parameterized backbone via `FSMParams` for thresholds, counter lengths, skip ratios, routing weights, and tier paths to balance accuracy, timeliness, and energy. It maintains stateful elements like active state, frame index, moving score history, and resource/LLM bookkeeping, integrating `ModelManager` and an optional remote dispatcher on initialization (flood_classifier/fsm/flood_fsm.py:102, flood_classifier/fsm/flood_fsm.py:135, flood_classifier/fsm/flood_fsm.py:345). The main loop (`next_state`) injects sensor baselines, manages entry/exit from resource-constrained state S5, selects tiers via `_choose_tier`, executes inference (local or remote) through the manager, and scores frames with `ClassifierBoth` (flood_classifier/fsm/flood_fsm.py:384). Signal checks detect conflicts, drift, ambiguity, and flapping using dedicated helpers that update counters and score windows, triggering escalations or cooldowns on threshold breaches (flood_classifier/fsm/flood_fsm.py:452, flood_classifier/fsm/flood_fsm.py:648, flood_classifier/fsm/flood_fsm.py:673, flood_classifier/fsm/flood_fsm.py:694). For persistent ambiguity in suspicious/ambiguous states with stopped motion, LLM arbitration requests confirmations (with per-state cooldowns), logging backend metadata (flood_classifier/fsm/flood_fsm.py:462). Transitions via `_determine_next_state` advance among S0/S1/S2/S3/S5 based on counters, ambiguity, resources, and flapping; `_finalize_decision` then emits a `FrameDecision` with predictions, tier usage, backend details, and skip markers (flood_classifier/fsm/flood_fsm.py:716, flood_classifier/fsm/flood_fsm.py:559). Overall, it manages tier selection, sensor/image fusion, conflict resolution, remote routing, baseline injection, state counter tracking, resource throttling, and metadata logging in `FrameDecision` (flood_classifier/fsm/flood_fsm.py:348).
-- **YOLO Inference Flow**: `FloodFSM` delegates YOLO tasks to `ModelManager`, which reuses or instantiates `MultiModelInference` for multi-checkpoint execution, along with `ImageProcessor` for normalization and `ResultFormatter` for output structuring. Preprocessing decodes base64 JPEGs, resizes images, and optionally normalizes pixels (flood_classifier/fsm/flood_fsm.py:200, flood_classifier/fsm/flood_fsm.py:236, yolov8_processor/preprocessing/image_processor.py:5). `MultiModelInference.run_all_inference` iterates over configured YOLO checkpoints (e.g., `config.model_size/model_number → best*.pt`), executes each via `YOLOv8Inference.run_inference`, and captures per-model detections (main_final.py:90, yolov8_processor/inference/multi_model_inference.py:82, yolov8_processor/inference/yolov8_inference.py:25). Results are fused by `YOLOv8FinalClassifier` using IoU-weighted overlap grouping and model agreement tracking, producing an aggregated overlay for auditing (yolov8_processor/inference/multi_model_inference.py:97, yolov8_processor/classifier/yolov8_final_classifier.py:20). Outputs are formatted into dictionaries (label, confidence, bbox, `model_ids`) for provenance (main_final.py:109, flood_classifier/fsm/flood_fsm.py:245, yolov8_processor/postprocessing/result_formatter.py:5). For the legacy `yolo_sensor` path, the full pipeline (decode, `MultiModelInference`, aggregation, formatting) runs inline before `YoloSensorStrategy` fusion (main_final.py:83).
-- **Baseline and Scoring Logic**: After each processed MQTT frame, the Pi persists the classification artifact and refreshes sensor baselines via `BaselineCalculator.update_baselines()`, which scans `storage/data_results/**.json` for entries marked `"classification_result": "No Flood"`, groups up to five hours of contiguous samples per diurnal window, and computes exponentially weighted moving averages (EWMA) for temperature, humidity, and pressure using `tau=12` hours. The resulting per-window baselines (e.g., `temperature_baseline`) are stored in `storage/sensor_baselines.json` for lookups (main_final.py:143, main_final.py:149, flood_classifier/baselinecalculator/baseline_calculator.py:49, flood_classifier/baselinecalculator/baseline_calculator.py:148). During FSM evaluation of a new frame, the appropriate window's baseline is retrieved (from the updated file or defaults) and injected into frame metadata for downstream fusion and remote requests; if unavailable (e.g., startup or insufficient history), it logs the issue and falls back to pure image scoring (flood_classifier/fsm/flood_fsm.py:384, flood_classifier/fsm/flood_fsm.py:392). `ClassifierBoth.classify_flood` computes sensor deltas by subtracting baselines from live readings (`delta_temperature`, `delta_humidity`, `delta_pressure`), applies configurable gates with graduated weighting (e.g., humidity jumps >2× threshold add twice the base weight), and accumulates a `sensor_boost` added to the image score (flood_classifier/inference/classifier_both.py:46, flood_classifier/inference/classifier_both.py:66). Image scoring via `EnhancedImageClassifier.calculate_flood_score` sums `confidence * bbox_area/image_area` for detections exceeding minimum confidence, with a +10% bonus per additional agreeing model from `model_ids` to reward consensus (flood_classifier/inference/image_classifier_2.py:9, flood_classifier/inference/image_classifier_2.py:33). The final `combined_score = image_score + sensor_boost` drives tier transitions and flood verdicts: comparison against `threshold_low`/`threshold_high` yields `final_prediction` 0/1/2 (no/suspicious/flood), returning a full breakdown (scores, anomalies, baseline snapshot) for FSM conflict detection, counter tracking, and `FrameDecision` logging (flood_classifier/inference/classifier_both.py:82, flood_classifier/fsm/flood_fsm.py:441).
-- **Offload Decision**: Before inference, `ModelManager.infer` queries `InferenceDispatcher.try_remote_yolo`, evaluating the requested tier, FSM state policy, and remote health to route locally or to the Jetson. Remote jobs package base64 images, sensor metadata, and tier info via MQTT, with responses including detections, latency, and backend details for logging (flood_classifier/fsm/flood_fsm.py:297, flood_classifier/inference/dispatcher.py:118, flood_classifier/inference/dispatcher.py:171, flood_classifier/fsm/flood_fsm.py:310).
-- **Inference Routing**: `InferenceDispatcher` determines per-frame execution location (local or remote), packages sensor context for MQTT offload, and triggers LLM confirmations for persistent ambiguous states (flood_classifier/inference/dispatcher.py:117). Returned detections (local or remote) are finalized by `ModelManager._format_detections` to include tier and model agreement before FSM handover (flood_classifier/fsm/flood_fsm.py:245).
+- **Payload Ingestion and Preparation**: `MQTTReceiver` buffers incoming payloads, `DataValidator` enforces the expected schema, and `StorageManager` archives raw JSON blobs under `storage/data/`. Only the freshest frame is retained via `LatestPayloadBuffer` so downstream stages operate on current context.
+- **Data Normalization (FSM Strategy)**: The production pipeline always runs the FSM strategy, transforming validated payloads into a normalized frame context with harmonized timestamps, motion/resource hints, sensor values, and base64 imagery.
+- **State Orchestration (Finite-State Machine)**:
+  - *State Set*: S0 – baseline watch; S1 – watchful suspicion; S2 – elevated review with sensor corroboration; S3 – confirmed flood response; S5 – resource-conserving fallback.
+  - *Process Flow*: 1) baseline retrieval; 2) tier selection; 3) routing choice (local vs remote); 4) inference execution; 5) scoring fusion; 6) conflict detection; 7) LLM trigger when ambiguity persists; 8) state transition update; 9) decision output for downstream consumers.
+- **YOLO Inference Flow**:
+  1. Preprocessing: decode the base64 image, resize to the configured `IMAGE_SIZE`, and normalize channels.
+  2. Multi-model inference: execute the configured checkpoints for the selected tier, using cached models when available.
+  3. Aggregation: merge detections across checkpoints, propagate model provenance, and align detections with sensor context.
+  4. Formatting: emit normalized detection objects ready for fusion and persistence.
+  - *Tier Lineup*: Nano – emergency-only minimal load; Small – Pi-resident default; Medium – remote precision tier; Large – heavy Jetson tier for complex frames.
+- **Baseline Calculation**: The baseline calculator scans `storage/data_results/`, groups historical sensor readings into diurnal windows (pre-dawn, midday, evening, night), computes exponentially weighted moving averages, and persists the consolidated values to `storage/sensor_baselines.json`.
+- **Scoring Logic**:
+  1. Retrieve the current baseline snapshot for the frame window.
+  2. Compute deltas between live sensor data and baseline.
+  3. Apply gating thresholds to suppress noise and respect cooldowns.
+  4. Calculate `sensor_boost` from anomaly magnitude and direction.
+  5. Calculate `image_score` from YOLO detections and tier confidence.
+  6. Add a consensus bonus when sensor and image signals align.
+  7. Combine image, sensor, and consensus terms into a unified score.
+  8. Classify the frame into no-flood, watch, or flood states for FSM consumption.
+- **Inference Routing and Offload**:
+  - Routing criteria: required tier, per-state routing policy, Jetson health check, and LLM confirmation requirement.
+  - Remote YOLO Flow: 1) package image, sensor, and baseline context; 2) publish to `inference/request`; 3) await Jetson response topic; 4) merge results back into the FSM pipeline.
+  - Remote LLM Flow: 1) package ambiguity snapshot and imagery; 2) request Jetson VLM confirmation; 3) receive classification with explanation metadata; 4) feed the verdict into scoring.
+- **Result Persistence**: `DataResultsSaver` writes enriched decisions to `storage/data_results/`, capturing image metadata, sensor deltas, FSM state, model tier usage, backend provenance, scores, and final classification for each frame.
 
-## 3. Jetson Worker: Offload and Heavy Computation
-The Jetson Worker supports the Processing Pi by executing compute-intensive tasks remotely, ensuring scalability and fault tolerance.
+## 3. Jetson Worker (Remote Inference Node)
+The Jetson worker provides heavyweight YOLO and local VLM inference for frames escalated by the Processing Pi.
 
-- **Connectivity and Queuing**: It sustains MQTT connections, sends heartbeats, and manages a single-job queue for real-time health monitoring and offload from the Pi. Incoming YOLO inference jobs arrive via MQTT with tier, image, and sensor context; only the latest job is queued, dropping superseded payloads to ensure the Pi receives the freshest results (jetson_worker/worker.py:182, jetson_worker/worker.py:215).
-- **YOLO Processing**: `_IMAGE_PROCESSOR` decodes base64 payloads, resizes to the configured `IMAGE_SIZE`, and provides a NumPy array to YOLO, matching the Pi's preprocessing. Model caching occurs per tier: on first request, `_discover_model_filenames` scans the tier directory for `best*.pt` files, loads each into `YOLOv8Inference`, and stores them in `_YOLO_MODELS` under lock protection; subsequent frames reuse warm GPU instances. Each cached model produces Ultralytics results; for multiple checkpoints, `_YOLO_AGGREGATOR.aggregate_results` fuses detections using confidence-weighted IoU grouping, merging confidences for consensus boxes and tagging `model_ids` for provenance. `ResultFormatter` converts aggregated results to plain dict detections, appending the tier label to each `model_ids` for Pi-side tier crediting (jetson_worker/worker.py:46, jetson_worker/worker.py:82, jetson_worker/worker.py:96, jetson_worker/worker.py:100, jetson_worker/worker.py:101, jetson_worker/worker.py:117, jetson_worker/worker.py:122, jetson_worker/worker.py:126).
-- **LLM Integration**: `JetsonWorker` processes incoming MQTT jobs in `_process_payload`, routing LLM confirmation requests from the Pi to `run_llm_inference` while retaining the job ID for response correlation. `run_llm_inference` decodes the base64 image, passes through sensor data, baselines, and anomaly context, and invokes a singleton `_LLM_CLASSIFIER` protected by a module-level lock for thread-safe lazy initialization. The classifier is created via `create_llm_classifier`, which selects between a remote OpenAI-backed `LLMImageClassifier` or an on-device `LocalVLMClassifier` (configurable for model name, device, and 4-bit quantization on Jetson GPUs). For local VLMs, `LocalVLMClassifier` lazily loads HuggingFace weights, constructs prompts blending the image with sensor context, and outputs a discrete flood label. To minimize latency, the worker can preload the VLM at startup via `_preload_llm`, invoking the classifier's `_initialize_model()` after MQTT setup. Completed predictions return via `inference/response/<job-id>`, echoing the decision and sensor context for Pi FSM logging and downstream observability (jetson_worker/worker.py:147, jetson_worker/worker.py:266, jetson_worker/llm/llm_factory.py:15, jetson_worker/llm/local_llm_classifier.py:17, jetson_worker/worker.py:200, jetson_worker/worker.py:300).
-- **Response Handling**: Responses echo sensor data/baselines, chosen tier, all detections, job IDs, latency metrics, and provenance data, publishing to `inference/response/<job-id>` for FSM reconciliation and backend performance logging (jetson_worker/worker.py:136, jetson_worker/worker.py:289, jetson_worker/worker.py:290).
-- **Reliability Features**: Superseded requests discard stale jobs, while heartbeat beacons allow quick fallback to local tiers during remote disruptions (jetson_worker/worker.py:258, jetson_worker/worker.py:311).
+- **Connectivity and Queuing**: The worker subscribes to MQTT request topics, advertises availability through a retained heartbeat every 10 seconds, and manages two task types (`yolo` and `llm`). A single-job queue retains only the latest request, superseding older jobs when new payloads arrive.
+- **YOLO Processing Pipeline**:
+  1. Preprocessing: decode base64 imagery, resize, and normalize using the shared image processor.
+  2. Model caching: lazily load all checkpoints for the requested tier on first use and reuse them for subsequent frames.
+  3. Multi-model inference: run each checkpoint, collecting detections per model.
+  4. Aggregation: fuse detections into a consensus result and annotate with model provenance.
+  5. Response packaging: return detections, tier metadata, sensor context echo, and any aggregation diagnostics.
+- **LLM Integration**: Production relies on the local vision-language model (VILA1.5-3b); the OpenAI API path is retained for testing only. The inference sequence is: 1) decode image bytes; 2) invoke the lightweight classifier facade; 3) build a prompt that blends sensor anomalies with flood cues; 4) run the local VLM inference; 5) respond with the predicted label and supporting details.
+  - *Local VLM Details*: Model path `jetson_worker/llm/models/VILA1.5-3b`, 4-bit quantization enabled, and lazy loading that initializes weights on the first LLM job or during optional preload at startup.
+- **Response Handling**: Each MQTT response includes the job id, tier, detections or VLM verdict, sensor echoes, latency metrics, and any error flags for the Processing Pi to ingest.
+- **Reliability Measures**: Single-job queue prevents backlog buildup, heartbeats expose liveness to the Pi, and graceful degradation routes errors back to the FSM so it can fall back to local processing.
+
+## 4. Data Flow Summary
+- End-to-end pipeline:
+  1. Gathering Pi captures image and sensor snapshot.
+  2. Gathering Pi publishes the normalized payload over MQTT.
+  3. Processing Pi ingests, validates, and archives the raw frame.
+  4. FSM normalizes the frame context and retrieves baselines.
+  5. FSM selects a model tier and routing policy.
+  6. Local or remote YOLO inference produces detections.
+  7. FSM computes scores, resolves conflicts, and triggers LLM confirmation when needed.
+  8. Remote VLM (if invoked) returns a consensus label.
+  9. FSM updates state, finalizes the decision, and persists results.
+  10. Decisions propagate to downstream monitoring and alerting.
+- MQTT topics in use: `sensor/data`, `inference/request`, `inference/response`, `inference/jetson/status`.
+
+## 5. Storage Structure
+```
+storage/
+├── data/
+│   └── <camera_id>_<YYYYMMDD_HHMMSSmmm>.json
+├── data_results/
+│   └── <YYYY-MM-DD>/
+│       └── <camera_id>_<HH-MM-SS>.json
+└── sensor_baselines.json
+```
+
+Example `storage/data_results/<date>/<camera>_<time>.json`:
+```json
+{
+  "classification_result": {
+    "prediction": 2,
+    "state": "flood",
+    "model_tier": "medium",
+    "scores": {
+      "combined_score": 2.68,
+      "image_score": 2.68,
+      "sensor_boost": 0.0
+    },
+    "backend": "remote",
+    "conflict": true,
+    "counters": {
+      "ambiguous": 3,
+      "conflict": 3,
+      "high": 3,
+      "low": 0
+    }
+  },
+  "metadata": {
+    "camera_id": "CAM123",
+    "timestamp": "2025-02-07T12:00:00Z",
+    "sensor_baseline": {
+      "temperature_baseline": 22.0,
+      "humidity_baseline": 50.0,
+      "pressure_baseline": 1015.0
+    },
+    "sensor_anomalies": {
+      "delta_temperature": 3.0,
+      "delta_humidity": 5.0,
+      "delta_pressure": -1.75
+    },
+    "motion": "stop"
+  },
+  "sensor_data": {
+    "temperature": 25.0,
+    "humidity": 55.0,
+    "pressure": 1013.25
+  }
+}
+```
+
+## 6. Configuration
+- Production defaults from `config.py`:
+  - `CLASSIFICATION_MODE = "fsm"` keeps the finite-state strategy active.
+  - `USE_LLM_CONFIRMATION = True` enables VLM arbitration when ambiguity persists.
+  - `IMAGE_SIZE = (640, 640)` aligns preprocessing across Pi and Jetson.
+  - `LOCAL_YOLO_TIER = "small"` determines the highest tier retained locally.
+  - `IMPORTANCE = {"energy": 0.33, "timeliness": 0.33, "accuracy": 0.34}` biases tier selection.
+  - `MQTT_TOPIC = "sensor/data"` and inference topics `inference/request`, `inference/response`, `inference/jetson/status` coordinate messaging.
+  - `MQTT_INFERENCE_TIMEOUT = 6.0` seconds bounds remote call latency.
+  - `USE_LOCAL_LLM = True`, `LOCAL_LLM_MODEL = jetson_worker/llm/models/VILA1.5-3b`, `LOCAL_LLM_USE_4BIT = True`, and `LOCAL_LLM_DEVICE = "cuda"` ensure the Jetson VLM runs locally.
+- Model path structure:
+```
+yolov8_processor/model/
+├── nano/
+│   └── best*.pt
+├── small/
+│   └── best*.pt
+├── medium/
+│   └── best*.pt
+└── large/
+    └── best*.pt
+```
+These directories house the checkpoints used by the multi-tier inference pipeline, with filenames following the `best<number>.pt` convention for each tier.
