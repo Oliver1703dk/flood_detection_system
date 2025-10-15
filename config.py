@@ -9,7 +9,7 @@ CLASSIFICATION_MODE =  "fsm"  # "fsm" or "llm_only"
 
 # When True, the YOLO+sensor strategy confirms flood predictions using an
 # additional LLM-based image detector.
-USE_LLM_CONFIRMATION = True
+USE_LLM_CONFIRMATION = False
 
 # Image size for inference (width, height)
 IMAGE_SIZE = (640, 640)
@@ -59,10 +59,10 @@ TEST_RESOURCE_CONSTRAINED = False
 # Set to None to skip seeding defaults and run image-only if no file exists.
 USE_DEFAULT_BASELINE = True
 DEFAULT_BASELINE = {
-    "pre_dawn":  { "temperature_baseline": 22.0, "humidity_baseline": 50.0, "pressure_baseline": 1015.0 },
-    "midday":    { "temperature_baseline": 22.0, "humidity_baseline": 50.0, "pressure_baseline": 1015.0 },
-    "evening":   { "temperature_baseline": 22.0, "humidity_baseline": 50.0, "pressure_baseline": 1015.0 },
-    "night":     { "temperature_baseline": 22.0, "humidity_baseline": 50.0, "pressure_baseline": 1015.0 },
+    "pre_dawn":  { "temperature_baseline": 17.0, "humidity_baseline": 78.0, "pressure_baseline": 1016.0 },
+    "midday":    { "temperature_baseline": 17.0, "humidity_baseline": 78.0, "pressure_baseline": 1016.0 },
+    "evening":   { "temperature_baseline": 17.0, "humidity_baseline": 78.0, "pressure_baseline": 1016.0 },
+    "night":     { "temperature_baseline": 17.0, "humidity_baseline": 78.0, "pressure_baseline": 1016.0 },
 }
 
 
@@ -100,6 +100,7 @@ MQTT_INFERENCE_MAX_PAYLOAD = 512_000  # bytes before compression
 INFERENCE_ROUTING = {
     "S0": "local",
     "S5": "local",
+    "flood_pending": "remote",
     "default": "remote",
 }
 

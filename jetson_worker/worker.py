@@ -119,7 +119,7 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             results_by_model[idx] = model.run_inference(image)
 
         if len(results_by_model) > 1:
-            results = _YOLO_AGGREGATOR.aggregate_results(results_by_model)
+            results = _YOLO_AGGREGATOR.classify(results_by_model)
         else:
             results = next(iter(results_by_model.values()))
 
