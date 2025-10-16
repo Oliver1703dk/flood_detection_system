@@ -1,6 +1,8 @@
 import os
 import cv2
 import numpy as np
+from pathlib import Path
+from datetime import datetime
 from ultralytics import YOLO
 import config
 from yolov8_processor.inference.label_normalizer import LabelNormalizer
@@ -22,20 +24,22 @@ class YOLOv8Inference:
         self.model = YOLO(model_path)
         self.identifier = str(identifier)
 
-    def run_inference(self, image, image_name=config.IMAGE_NAME):
+    def run_inference(self, image, image_name=config.IMAGE_NAME, run_id=None):
         """Runs YOLOv8 inference on the given image."""
+        _ = image_name  # compatibility; naming handled via run_id
         results = self.model(image)
         # Normalize the labels in the results
         normalizer = LabelNormalizer()
         results = normalizer.normalize(results)
-        self.draw_bounding_boxes(image, results, image_name=image_name)
+        self.draw_bounding_boxes(image, results, image_name=image_name, run_id=run_id)
         return results
 
-    def draw_bounding_boxes(self, image, results, image_name=config.IMAGE_NAME):
+    def draw_bounding_boxes(self, image, results, image_name=config.IMAGE_NAME, run_id=None):
         """
         Draws bounding boxes on the image based on YOLOv8 detections.
         Saves the image using the model identifier.
         """
+        _ = image_name  # retained for backwards compatibility
         # Convert float images ([0,1]) to 8-bit ([0,255]) if needed.
         if image.dtype in [np.float32, np.float64] and image.max() <= 1.0:
             image_8u = (image * 255).astype(np.uint8)
@@ -58,15 +62,20 @@ class YOLOv8Inference:
                 cv2.putText(image_8u, label_text, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        # Build the output filename with the identifier.
-        base_name, _ = os.path.splitext(image_name)
-        filename = base_name
-        if self.identifier:
-            filename += f"_{self.identifier}"
-        filename += "_output.jpg"
-        os.makedirs(os.path.join(config.IMAGE_MODE, "results"), exist_ok=True)
-        save_path = os.path.join(config.IMAGE_MODE, "results", filename)
-        cv2.imwrite(save_path, image_8u)
+        # Persist each inference result with a unique timestamp-based filename.
+        output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+
+        identifier = (self.identifier or "").strip()
+        if not identifier:
+            identifier = "1"
+
+        filename = f"{timestamp}_detection-{identifier}.jpg"
+        save_path = output_dir / filename
+
+        cv2.imwrite(str(save_path), image_8u)
         print(f"Detection results saved to {save_path}")
 
         return image_8u

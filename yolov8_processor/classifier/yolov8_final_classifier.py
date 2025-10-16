@@ -1,4 +1,5 @@
-import os
+from datetime import datetime
+from pathlib import Path
 import cv2
 import numpy as np
 import config  # Import config to access IMAGE_NAME
@@ -143,7 +144,7 @@ class YOLOv8FinalClassifier:
         y2 = y + h / 2
         return x1, y1, x2, y2
 
-    def draw_aggregated_bounding_boxes(self, image, aggregated_results, image_name=config.IMAGE_NAME):
+    def draw_aggregated_bounding_boxes(self, image, aggregated_results, image_name=config.IMAGE_NAME, run_id=None):
         """
         Draws aggregated bounding boxes on the provided image and saves the image.
         The image is saved to the same folder as your YOLOv8Inference output.
@@ -155,6 +156,11 @@ class YOLOv8FinalClassifier:
         Returns:
             numpy.ndarray: The image with drawn bounding boxes.
         """
+        if image.dtype in (np.float32, np.float64) and image.max() <= 1.0:
+            image_8u = (image * 255).astype(np.uint8)
+        else:
+            image_8u = image.copy()
+
         for agg_res in aggregated_results:
             for box in agg_res.boxes:
                 # box.xywh is a numpy array in the format [center_x, center_y, width, height]
@@ -169,23 +175,26 @@ class YOLOv8FinalClassifier:
                 conf = box.conf
                 
                 # Draw the rectangle and label.
-                cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.rectangle(image_8u, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 agreement = len(box.model_ids)
                 label_text = f"{label} ({conf:.2f}) M={agreement}"
-                cv2.putText(image, label_text, (x1, max(y1 - 10, 0)), 
+                cv2.putText(image_8u, label_text, (x1, max(y1 - 10, 0)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
-        # Build the output filename similar to YOLOv8Inference.
-        base_name, _ = os.path.splitext(image_name)
-        initial_filename = base_name
-        filename = f"{initial_filename}_aggregated_output.jpg"
-        os.makedirs(os.path.join(config.IMAGE_MODE, "results"), exist_ok=True)
-        save_path = os.path.join(config.IMAGE_MODE, "results", filename)
-        cv2.imwrite(save_path, image)
-        print(f"Final aggregated output image saved to {save_path}")
-        return image
+        _ = image_name  # compatibility; filenames derive from run_id now
 
-    def classify_and_draw(self, results_dict, image, image_name=config.IMAGE_NAME):
+        output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        filename = f"{timestamp}_aggregated.jpg"
+        save_path = output_dir / filename
+
+        cv2.imwrite(str(save_path), image_8u)
+        print(f"Final aggregated output image saved to {save_path}")
+        return image_8u
+
+    def classify_and_draw(self, results_dict, image, image_name=config.IMAGE_NAME, run_id=None):
         """
         Combines classification and drawing of aggregated bounding boxes.
         
@@ -196,6 +205,12 @@ class YOLOv8FinalClassifier:
         Returns:
             tuple: (aggregated_results, image_with_boxes)
         """
+        _ = image_name  # compatibility
         aggregated_results = self.classify(results_dict)
-        image_with_boxes = self.draw_aggregated_bounding_boxes(image.copy(), aggregated_results, image_name=image_name)
+        image_with_boxes = self.draw_aggregated_bounding_boxes(
+            image.copy(),
+            aggregated_results,
+            image_name=image_name,
+            run_id=run_id,
+        )
         return aggregated_results

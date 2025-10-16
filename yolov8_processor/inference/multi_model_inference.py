@@ -1,5 +1,6 @@
 import os
 import cv2
+from datetime import datetime
 import config
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.classifier.yolov8_final_classifier import YOLOv8FinalClassifier
@@ -86,16 +87,17 @@ class MultiModelInference:
         Returns a single list of detection results.
         """
         print(image_name)
+        run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_dict = {}
         for model_id, inference_model in self.models.items():
             print(f"Running inference for model {model_id} on image {image_name}...")
-            results = inference_model.run_inference(image, image_name=image_name)
+            results = inference_model.run_inference(image, image_name=image_name, run_id=run_id)
             print(f"Model {model_id} detected {len(results)} objects.")
             results_dict[model_id] = results
         
         # Aggregate/fuse predictions from all models.
         final_classifier = YOLOv8FinalClassifier()
-        aggregated_results = final_classifier.classify_and_draw(results_dict, image, image_name=image_name)
+        aggregated_results = final_classifier.classify_and_draw(results_dict, image, image_name=image_name, run_id=run_id)
 
         # aggregated_results = final_classifier.classify(results_dict)
         return aggregated_results

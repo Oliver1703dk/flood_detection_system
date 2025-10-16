@@ -12,6 +12,15 @@ from flood_classifier.fsm.flood_fsm import (
     decision_to_dict,
 )
 
+_default_fsm: Optional[FloodFSM] = None
+
+
+def _get_default_fsm() -> FloodFSM:
+    global _default_fsm
+    if _default_fsm is None:
+        _default_fsm = FloodFSM()
+    return _default_fsm
+
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
@@ -28,7 +37,7 @@ class FSMStrategy(ClassificationStrategy):
     """Classification strategy backed by :class:`FloodFSM`."""
 
     def __init__(self, fsm: Optional[FloodFSM] = None) -> None:
-        self._fsm = fsm or FloodFSM()
+        self._fsm = fsm if fsm is not None else _get_default_fsm()
 
     def classify(self, detection_results, message):  # type: ignore[override]
         """Ignore external detections and delegate to the FSM."""
@@ -53,20 +62,9 @@ class FSMStrategy(ClassificationStrategy):
         )
 
 
-_default_fsm: Optional[FloodFSM] = None
-
-
-def _get_default_fsm() -> FloodFSM:
-    global _default_fsm
-    if _default_fsm is None:
-        _default_fsm = FloodFSM()
-    return _default_fsm
-
-
 def classify_frame(message: Dict[str, Any]) -> FrameDecision:
     """Convenience wrapper for stateless callers."""
-    ctx = FSMStrategy(_get_default_fsm())._build_context(message)
-    return _get_default_fsm().next_state(ctx)
+    return FSMStrategy().classify([], message)
 
 
 __all__ = ["FSMStrategy", "classify_frame", "decision_to_dict"]

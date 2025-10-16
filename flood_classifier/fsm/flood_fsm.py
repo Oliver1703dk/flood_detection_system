@@ -91,12 +91,11 @@ class ModelTier(Enum):
 class FloodState(Enum):
     """FSM states matching the high-level behaviour specification."""
 
-    S0 = "normal"
-    S1 = "suspicious"
-    S2_PENDING = "flood_pending"
-    S2 = "flood"
-    S3 = "ambiguous"
-    S5 = "resource"
+    S0 = "S0"
+    S1 = "S1"
+    S2 = "S2"
+    S3 = "S3"
+    S5 = "S5"
 
 
 @dataclass
@@ -105,9 +104,9 @@ class FSMParams:
 
     threshold_low: float = 0.35
     threshold_high: float = 0.65
-    frames_high: int = 3  # M consecutive high frames required for flood
-    frames_low: int = 3  # N consecutive low frames required to clear flood
-    frames_ambiguous: int = 3  # K consecutive ambiguous frames for escalation
+    frames_high: int = 2  # M consecutive high frames required for flood
+    frames_low: int = 2  # N consecutive low frames required to clear flood
+    frames_ambiguous: int = 2  # K consecutive ambiguous frames for escalation
     model_cooldown: int = 1  # C frames between YOLO model switches
     flap_window: int = 8  # W window for oscillation detection
     resource_skip_ratio: int = 3  # Process 1 of N frames while constrained
@@ -366,17 +365,19 @@ class FloodFSM:
 
         self.state: FloodState = FloodState.S0
         self._frame_index: int = -1
-        self._counters: Dict[str, int] = {"high": 0, "low": 0, "ambiguous": 0, "conflict": 0}
+        self._counters: Dict[str, int] = {
+            "high": 0,
+            "low": 0,
+            "ambiguous": 0,
+            "conflict": 0,
+            "mid": 0,
+        }
         self._score_history: Deque[float] = deque(maxlen=self.params.flap_window)
         self._last_decision: Optional[FrameDecision] = None
         self._resource_anchor_state: Optional[FloodState] = None
         self._resource_skip_cursor: int = 0
         self._llm_last_used: Dict[FloodState, int] = {}
         self._s2_llm_confirmed: bool = False
-        self._s2_confirmation_pending: bool = False
-        self._s2_pending_from: Optional[FloodState] = None
-        self._s2_pending_since: Optional[int] = None
-        self._s2_llm_request_active: bool = False
         self._s2_last_confirm_frame: int = -1
 
     def _build_dispatcher(self) -> Optional["InferenceDispatcher"]:
@@ -437,7 +438,7 @@ class FloodFSM:
                 return new_decision
             self._resource_skip_cursor = 1  # current frame processed; start skip cycle next frame
 
-        requested_tier = self._choose_tier(motion)
+        requested_tier = self._choose_tier(motion, resource_flag=resource_flag)
         detections, model_tier, switched, backend_meta = self.model_manager.infer(
             ctx,
             requested_tier,
@@ -461,8 +462,9 @@ class FloodFSM:
         conflict = self._detect_conflict(combined, image_score, sensor_boost)
         drift = self._detect_drift(ctx.sensor_data)
 
-        ambiguous = self.params.threshold_low <= combined < self.params.threshold_high or conflict
-        self._update_counters(combined, ambiguous, conflict)
+        mid_band = self.params.threshold_low <= combined < self.params.threshold_high
+        ambiguous = mid_band or conflict
+        self._update_counters(combined, ambiguous, conflict, mid_band)
         self._score_history.append(combined)
         flapping = self._is_flapping()
 
@@ -506,7 +508,7 @@ class FloodFSM:
             current_state=self.state,
             combined=combined,
             resource_flag=resource_flag,
-            ambiguous=ambiguous,
+            conflict=conflict,
             flapping=flapping,
         )
         (
@@ -515,11 +517,12 @@ class FloodFSM:
             llm_used,
             llm_prediction,
             llm_backend_info,
-        ) = self._apply_s2_entry_logic(
+        ) = self._enforce_s2_confirmation(
             prev_state=prev_state,
             candidate_state=next_state,
             resource_flag=resource_flag,
             ctx=ctx,
+            motion=motion,
             prediction=prediction,
             llm_used=llm_used,
             llm_prediction=llm_prediction,
@@ -529,7 +532,6 @@ class FloodFSM:
         if self.state != FloodState.S5:
             self._resource_anchor_state = None
             self._resource_skip_cursor = 0
-        self._sync_s2_flags_after_transition(prev_state, self.state)
 
         decision = self._finalize_decision(
             base_decision=None,
@@ -584,138 +586,135 @@ class FloodFSM:
             s2_llm_confirmed=False,
         )
 
-    def _effective_entry_state(self, prev_state: FloodState) -> FloodState:
-        if prev_state == FloodState.S5 and self._resource_anchor_state is not None:
-            anchor = self._resource_anchor_state
-            if anchor == FloodState.S2_PENDING and self._s2_pending_from is not None:
-                return self._s2_pending_from
-            return anchor
-        if prev_state == FloodState.S2_PENDING and self._s2_pending_from is not None:
-            return self._s2_pending_from
-        return prev_state
-
-    def _begin_s2_pending(self, from_state: FloodState) -> None:
-        self._s2_confirmation_pending = True
-        self._s2_pending_from = from_state
-        self._s2_pending_since = self._frame_index
-        self._s2_llm_confirmed = False
-
-    def _attempt_s2_confirmation(self, ctx: FrameContext) -> Tuple[bool, Optional[int], Dict[str, Any]]:
-        if not self.llm_enabled or self.dispatcher is None:
-            return False, None, {}
-
-        min_gap = max(1, self.params.frames_ambiguous)
-        if self._s2_last_confirm_frame >= 0 and (self._frame_index - self._s2_last_confirm_frame) < min_gap:
-            return False, None, {}
-
-        try:
-            self._s2_llm_request_active = True
-            llm_result = self.dispatcher.run_remote_llm(
-                state=FloodState.S2_PENDING,
-                frame_index=self._frame_index,
-                ctx=ctx,
-            )
-        except Exception as exc:  # pragma: no cover - network/remote errors
-            print(f"Remote LLM confirmation failed ({exc}); postponing flood confirmation.")
-            llm_result = None
-        finally:
-            self._s2_llm_request_active = False
-            self._s2_last_confirm_frame = self._frame_index
-
-        if not llm_result:
-            return False, None, {}
-
-        prediction_raw = llm_result.get("prediction")
-        try:
-            llm_prediction = int(prediction_raw) if prediction_raw is not None else None
-        except (TypeError, ValueError):
-            llm_prediction = None
-
-        backend_info = {
-            "latency_s": llm_result.get("latency_s"),
-            "request_id": llm_result.get("request_id"),
-        }
-        self._llm_last_used[FloodState.S2_PENDING] = self._frame_index
-        return True, llm_prediction, backend_info
-
-    def _apply_s2_entry_logic(
+    def _enforce_s2_confirmation(
         self,
         *,
         prev_state: FloodState,
         candidate_state: FloodState,
         resource_flag: bool,
         ctx: FrameContext,
+        motion: MotionState,
         prediction: int,
         llm_used: bool,
         llm_prediction: Optional[int],
         llm_backend_info: Dict[str, Any],
     ) -> Tuple[FloodState, int, bool, Optional[int], Dict[str, Any]]:
-        entry_from = self._effective_entry_state(prev_state)
-
         next_state = candidate_state
         updated_prediction = prediction
         updated_llm_used = llm_used
         updated_llm_prediction = llm_prediction
-        updated_llm_backend = llm_backend_info
+        updated_backend = llm_backend_info
+
+        if next_state == FloodState.S2 and prev_state != FloodState.S2:
+            if not self.llm_enabled or self.dispatcher is None:
+                self._s2_llm_confirmed = True
+                return next_state, updated_prediction, updated_llm_used, updated_llm_prediction, updated_backend
+
+            min_gap = max(1, self.params.frames_ambiguous)
+            if self._s2_last_confirm_frame >= 0 and (self._frame_index - self._s2_last_confirm_frame) < min_gap:
+                self._s2_llm_confirmed = False
+                return (
+                    prev_state,
+                    updated_prediction,
+                    updated_llm_used,
+                    updated_llm_prediction,
+                    updated_backend,
+                )
+
+            llm_result: Optional[Dict[str, Any]]
+            try:
+                llm_result = self.dispatcher.run_remote_llm(
+                    state=FloodState.S2,
+                    frame_index=self._frame_index,
+                    ctx=ctx,
+                )
+            except Exception as exc:  # pragma: no cover - network/remote errors
+                print(f"Remote LLM confirmation failed ({exc}); postponing flood confirmation.")
+                llm_result = None
+
+            self._s2_last_confirm_frame = self._frame_index
+
+            if not llm_result:
+                self._s2_llm_confirmed = False
+                return (
+                    prev_state,
+                    updated_prediction,
+                    updated_llm_used,
+                    updated_llm_prediction,
+                    updated_backend,
+                )
+
+            prediction_raw = llm_result.get("prediction")
+            try:
+                confirm_prediction = int(prediction_raw) if prediction_raw is not None else None
+            except (TypeError, ValueError):
+                confirm_prediction = None
+
+            updated_llm_used = True
+            updated_llm_prediction = confirm_prediction
+            updated_backend = {
+                "latency_s": llm_result.get("latency_s"),
+                "request_id": llm_result.get("request_id"),
+            }
+            self._llm_last_used[FloodState.S2] = self._frame_index
+
+            if confirm_prediction in (1, 2):
+                self._s2_llm_confirmed = True
+                updated_prediction = confirm_prediction
+                return next_state, updated_prediction, updated_llm_used, updated_llm_prediction, updated_backend
+
+            self._s2_llm_confirmed = False
+            self._counters["high"] = 0
+            return (
+                prev_state,
+                0,
+                updated_llm_used,
+                updated_llm_prediction,
+                updated_backend,
+            )
 
         if (
             next_state == FloodState.S2
-            and entry_from != FloodState.S2
+            and prev_state == FloodState.S2
             and self.llm_enabled
-            and not self._s2_llm_confirmed
+            and self.dispatcher is not None
+            and not resource_flag
+            and motion != MotionState.FAST
+            and self.params.accuracy_weight > max(self.params.timeliness_weight, self.params.energy_weight)
+            and self._llm_last_used.get(FloodState.S2, -1) < self._frame_index - self.params.frames_ambiguous
         ):
-            next_state = FloodState.S2_PENDING
-            self._begin_s2_pending(entry_from)
-
-        if next_state == FloodState.S2_PENDING:
-            if self._s2_pending_from is None:
-                self._begin_s2_pending(entry_from)
-
-            if self.llm_enabled and not resource_flag and self.dispatcher is not None:
-                llm_attempted, confirm_prediction, confirm_backend = self._attempt_s2_confirmation(ctx)
-                if llm_attempted:
+            try:
+                llm_result = self.dispatcher.run_remote_llm(
+                    state=FloodState.S2,
+                    frame_index=self._frame_index,
+                    ctx=ctx,
+                )
+            except Exception as exc:  # pragma: no cover - network/remote errors
+                print(f"Remote LLM request failed ({exc}); continuing without optional S2 confirmation.")
+                llm_result = None
+            if llm_result:
+                optional_raw = llm_result.get("prediction")
+                try:
+                    optional_prediction = int(optional_raw) if optional_raw is not None else None
+                except (TypeError, ValueError):
+                    optional_prediction = None
+                if optional_prediction is not None:
                     updated_llm_used = True
-                    updated_llm_prediction = confirm_prediction
-                    if confirm_backend:
-                        updated_llm_backend = confirm_backend
-                    if confirm_prediction in (1, 2):
-                        self._s2_llm_confirmed = True
-                        self._s2_confirmation_pending = False
-                        next_state = FloodState.S2
-                        updated_prediction = confirm_prediction
-                    elif confirm_prediction == 0:
-                        self._s2_llm_confirmed = False
-                        self._s2_confirmation_pending = False
-                        next_state = entry_from
+                    updated_llm_prediction = optional_prediction
+                    updated_backend = {
+                        "latency_s": llm_result.get("latency_s"),
+                        "request_id": llm_result.get("request_id"),
+                    }
+                    self._llm_last_used[FloodState.S2] = self._frame_index
+                    if optional_prediction in (1, 2):
+                        updated_prediction = optional_prediction
+                    elif optional_prediction == 0:
                         updated_prediction = 0
-                        self._counters["high"] = 0
-            elif not self.llm_enabled or self.dispatcher is None:
-                # No LLM available; treat as implicitly confirmed.
-                self._s2_llm_confirmed = False
-                self._s2_confirmation_pending = False
-                next_state = FloodState.S2
 
-        return next_state, updated_prediction, updated_llm_used, updated_llm_prediction, updated_llm_backend
+        if next_state != FloodState.S2:
+            self._s2_llm_confirmed = False
 
-    def _sync_s2_flags_after_transition(self, prev_state: FloodState, next_state: FloodState) -> None:
-        if prev_state == FloodState.S2 and next_state != FloodState.S2:
-            self._s2_llm_confirmed = False
-        if next_state == FloodState.S5:
-            self._s2_llm_confirmed = False
-            return
-
-        if next_state == FloodState.S2:
-            self._s2_confirmation_pending = False
-            self._s2_pending_from = None
-            self._s2_pending_since = None
-        elif next_state == FloodState.S2_PENDING:
-            # Preserve pending metadata for future confirmation attempts.
-            pass
-        else:
-            self._s2_confirmation_pending = False
-            self._s2_pending_from = None
-            self._s2_pending_since = None
-            self._s2_llm_confirmed = False
+        return next_state, updated_prediction, updated_llm_used, updated_llm_prediction, updated_backend
 
     def _finalize_decision(
         self,
@@ -781,46 +780,46 @@ class FloodFSM:
             s2_llm_confirmed=s2_llm_confirmed,
         )
 
-    def _choose_tier(self, motion: MotionState) -> ModelTier:
+    def _choose_tier(self, motion: MotionState, *, resource_flag: bool) -> ModelTier:
         anchor_state = self._resource_anchor_state if self.state == FloodState.S5 else self.state
+        tiers = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.LARGE]
+
+        def accuracy_dominant() -> bool:
+            return self.params.accuracy_weight > max(
+                self.params.timeliness_weight, self.params.energy_weight
+            )
+
         if anchor_state == FloodState.S0:
             base_tier = ModelTier.NANO
         elif anchor_state == FloodState.S1:
             if motion == MotionState.FAST:
                 base_tier = ModelTier.SMALL
             else:
-                acc = self.params.accuracy_weight
-                if acc >= max(self.params.timeliness_weight, self.params.energy_weight):
-                    base_tier = ModelTier.MEDIUM
-                else:
-                    base_tier = ModelTier.SMALL
-        elif anchor_state == FloodState.S2_PENDING:
-            origin = self._s2_pending_from or FloodState.S1
-            if origin == FloodState.S0:
-                base_tier = ModelTier.NANO
-            elif origin == FloodState.S3:
-                current = self.model_manager.active_tier or ModelTier.SMALL
+                base_tier = ModelTier.MEDIUM if accuracy_dominant() else ModelTier.SMALL
+        elif anchor_state == FloodState.S2:
+            if motion == MotionState.FAST:
+                base_tier = ModelTier.SMALL
+            else:
+                base_tier = ModelTier.MEDIUM
+                if not resource_flag and accuracy_dominant():
+                    current = self.model_manager.active_tier or ModelTier.MEDIUM
+                    if current == ModelTier.LARGE:
+                        base_tier = ModelTier.LARGE
+                    else:
+                        base_tier = ModelTier.MEDIUM.higher()
+        elif anchor_state == FloodState.S3:
+            current = self.model_manager.active_tier or ModelTier.MEDIUM
+            if tiers.index(current) >= tiers.index(ModelTier.MEDIUM):
                 base_tier = current.higher()
             else:
-                if motion == MotionState.FAST:
-                    base_tier = ModelTier.SMALL
-                else:
-                    acc = self.params.accuracy_weight
-                    if acc >= max(self.params.timeliness_weight, self.params.energy_weight):
-                        base_tier = ModelTier.MEDIUM
-                    else:
-                        base_tier = ModelTier.SMALL
-        elif anchor_state == FloodState.S2:
-            base_tier = ModelTier.SMALL if motion == MotionState.FAST else ModelTier.MEDIUM
-        elif anchor_state == FloodState.S3:
-            current = self.model_manager.active_tier or ModelTier.SMALL
-            base_tier = current.higher()
-        else:  # S5 fallback and any other unexpected state
-            base_tier = self.model_manager.active_tier or ModelTier.NANO
+                base_tier = ModelTier.MEDIUM
+        else:
+            active = self.model_manager.active_tier
+            base_tier = active if active is not None else ModelTier.NANO
 
         if self.state == FloodState.S5:
             degraded = base_tier.lower()
-            if anchor_state in (FloodState.S2, FloodState.S2_PENDING) and degraded == ModelTier.NANO:
+            if anchor_state == FloodState.S2 and degraded == ModelTier.NANO:
                 degraded = ModelTier.SMALL
             return degraded
         return base_tier
@@ -850,7 +849,13 @@ class FloodFSM:
             or sensor_data.get("drift_flag")
         )
 
-    def _update_counters(self, combined: float, ambiguous: bool, conflict: bool) -> None:
+    def _update_counters(
+        self,
+        combined: float,
+        ambiguous: bool,
+        conflict: bool,
+        mid_band: bool,
+    ) -> None:
         if combined >= self.params.threshold_high:
             self._counters["high"] += 1
         else:
@@ -870,6 +875,11 @@ class FloodFSM:
             self._counters["conflict"] += 1
         else:
             self._counters["conflict"] = 0
+
+        if mid_band:
+            self._counters["mid"] += 1
+        else:
+            self._counters["mid"] = 0
 
     def _is_flapping(self) -> bool:
         if len(self._score_history) < 3:
@@ -898,62 +908,68 @@ class FloodFSM:
         current_state: FloodState,
         combined: float,
         resource_flag: bool,
-        ambiguous: bool,
+        conflict: bool,
         flapping: bool,
     ) -> FloodState:
+        if resource_flag:
+            return FloodState.S5
+
+        low_stable = self._counters["low"] >= self.params.frames_low
+        high_stable = self._counters["high"] >= self.params.frames_high
+        mid_stable = self._counters["mid"] >= self.params.frames_high
+        ambiguity_persist = self._counters["ambiguous"] >= self.params.frames_ambiguous
+        conflict_persist = self._counters["conflict"] >= self.params.frames_ambiguous
+
         if current_state == FloodState.S5:
-            if resource_flag:
-                return FloodState.S5
-            # Recovery path when resources return.
             if combined >= self.params.threshold_high:
                 return FloodState.S2
             if combined < self.params.threshold_low:
                 return FloodState.S0
-            if self._counters["conflict"] >= self.params.frames_ambiguous:
+            if ambiguity_persist or conflict_persist:
                 return FloodState.S3
             return FloodState.S1
 
         if current_state == FloodState.S0:
-            if ambiguous or self._counters["conflict"] >= self.params.frames_ambiguous:
+            if conflict_persist:
+                return FloodState.S3
+            if high_stable:
+                return FloodState.S2
+            if mid_stable or ambiguity_persist:
                 return FloodState.S1
             return FloodState.S0
 
         if current_state == FloodState.S1:
-            if self._counters["high"] >= self.params.frames_high:
+            if high_stable:
                 return FloodState.S2
-            if self._counters["low"] >= self.params.frames_low:
+            if low_stable:
                 return FloodState.S0
-            if self._counters["conflict"] >= self.params.frames_ambiguous:
+            if ambiguity_persist or conflict_persist:
                 return FloodState.S3
             return FloodState.S1
 
-        if current_state == FloodState.S2_PENDING:
-            if resource_flag:
-                return FloodState.S5
-            if self._counters["low"] >= self.params.frames_low:
-                return FloodState.S0
-            if flapping:
-                return FloodState.S3
-            if self._s2_llm_confirmed:
-                return FloodState.S2
-            return FloodState.S2_PENDING
-
         if current_state == FloodState.S2:
-            if self._counters["low"] >= self.params.frames_low:
+            if low_stable:
                 return FloodState.S0
-            if flapping:
+            if ambiguity_persist or conflict_persist:
                 return FloodState.S3
+            if mid_stable or flapping:
+                return FloodState.S1
             return FloodState.S2
 
         if current_state == FloodState.S3:
-            if self._counters["high"] >= self.params.frames_high:
+            if high_stable:
                 return FloodState.S2
-            if self._counters["low"] >= self.params.frames_low:
+            if low_stable:
                 return FloodState.S0
-            if resource_flag:
-                return FloodState.S5
+            if not conflict and mid_stable:
+                return FloodState.S1
             return FloodState.S3
 
+        # Fallback - treat any unexpected state as S0.
+        if high_stable:
+            return FloodState.S2
+        if mid_stable or ambiguity_persist:
+            return FloodState.S1
         return FloodState.S0
 
 

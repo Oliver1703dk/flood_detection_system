@@ -12,6 +12,7 @@ import signal
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -103,25 +104,24 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             _log(f"Loading YOLO models for tier '{tier_value}'")
             model_filenames = _discover_model_filenames(tier_value)
             models = []
-            for filename in model_filenames:
+            for model_index, filename in enumerate(model_filenames, start=1):
                 model_path = _YOLO_MODEL_ROOT / filename
                 if not model_path.exists():
                     _log(f"Warning: model file '{model_path}' not found; skipping")
                     continue
-                models.append(YOLOv8Inference(str(model_path)))
+                models.append(YOLOv8Inference(str(model_path), identifier=str(model_index)))
             if not models:
                 raise FileNotFoundError(f"No valid YOLO models found for tier '{tier_value}'")
             _YOLO_MODELS[tier_value] = models
             _log(f"Loaded {len(models)} YOLO model(s) for tier '{tier_value}'")
 
+        run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_by_model = {}
-        for idx, model in enumerate(models):
-            results_by_model[idx] = model.run_inference(image)
+        for idx, model in enumerate(models, start=1):
+            results_by_model[idx] = model.run_inference(image, run_id=run_id)
 
-        if len(results_by_model) > 1:
-            results = _YOLO_AGGREGATOR.classify(results_by_model)
-        else:
-            results = next(iter(results_by_model.values()))
+        results = _YOLO_AGGREGATOR.classify(results_by_model)
+        _YOLO_AGGREGATOR.draw_aggregated_bounding_boxes(image, results, run_id=run_id)
 
     formatted = _RESULT_FORMATTER.format_results(results)
 

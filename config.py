@@ -3,6 +3,7 @@
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
+DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"
 
 # Choose classification mode: "yolo_sensor", "llm_only", or "fsm"
 CLASSIFICATION_MODE =  "fsm"  # "fsm" or "llm_only"
@@ -70,9 +71,9 @@ DEFAULT_BASELINE = {
 FSM_DEFAULTS = {
     "threshold_low": 0.35,
     "threshold_high": 0.65,
-    "frames_high": 3,
-    "frames_low": 3,
-    "frames_ambiguous": 3,
+    "frames_high": 2,
+    "frames_low": 2,
+    "frames_ambiguous": 2,
     "model_cooldown": 1,
     "flap_window": 8,
     "resource_skip_ratio": 3,
@@ -99,8 +100,10 @@ MQTT_INFERENCE_MAX_PAYLOAD = 512_000  # bytes before compression
 # can fine-tune behaviour without code edits.
 INFERENCE_ROUTING = {
     "S0": "local",
+    "S1": "remote",
+    "S2": "remote",
+    "S3": "remote",
     "S5": "local",
-    "flood_pending": "remote",
     "default": "remote",
 }
 

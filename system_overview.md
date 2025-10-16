@@ -19,8 +19,9 @@ The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives th
 - **Payload Ingestion and Preparation**: `MQTTReceiver` buffers incoming payloads, `DataValidator` enforces the expected schema, and `StorageManager` archives raw JSON blobs under `storage/data/`. Only the freshest frame is retained via `LatestPayloadBuffer` so downstream stages operate on current context.
 - **Data Normalization (FSM Strategy)**: The production pipeline always runs the FSM strategy, transforming validated payloads into a normalized frame context with harmonized timestamps, motion/resource hints, sensor values, and base64 imagery.
 - **State Orchestration (Finite-State Machine)**:
-  - *State Set*: S0 – baseline watch; S1 – watchful suspicion; S2 – elevated review with sensor corroboration; S3 – confirmed flood response; S5 – resource-conserving fallback.
-  - *Process Flow*: 1) baseline retrieval; 2) tier selection; 3) routing choice (local vs remote); 4) inference execution; 5) scoring fusion; 6) conflict detection; 7) LLM trigger when ambiguity persists; 8) state transition update; 9) decision output for downstream consumers.
+  - *State Set*: S0 – normal watch with YOLO-n; S1 – uncertainty investigation with a tier bump and optional single LLM check when enabled; S2 – confirmed flood that mandates one LLM confirmation on first entry (when enabled) and may request follow-ups for slow scenes; S3 – ambiguity/conflict resolution that escalates to higher-accuracy tiers; S5 – resource-constrained override that degrades tiers and suspends LLMs.
+  - *Process Flow*: 1) baseline retrieval; 2) motion and resource assessment; 3) tier selection; 4) routing choice (local vs remote); 5) inference execution; 6) scoring fusion; 7) conflict tracking and, when `USE_LLM_CONFIRMATION` is true, LLM trigger for ambiguous frames or initial S2 entry; 8) state transition update; 9) decision output for downstream consumers.
+  - *Hysteresis & Counters*: thresholds at 0.35/0.65 with high/low/ambiguous counters (M/N/K) to prevent flapping; S5 retains the previous state as an anchor and exits once resources recover.
 - **YOLO Inference Flow**:
   1. Preprocessing: decode the base64 image, resize to the configured `IMAGE_SIZE`, and normalize channels.
   2. Multi-model inference: execute the configured checkpoints for the selected tier, using cached models when available.
@@ -40,7 +41,7 @@ The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives th
 - **Inference Routing and Offload**:
   - Routing criteria: required tier, per-state routing policy, Jetson health check, and LLM confirmation requirement.
   - Remote YOLO Flow: 1) package image, sensor, and baseline context; 2) publish to `inference/request`; 3) await Jetson response topic; 4) merge results back into the FSM pipeline.
-  - Remote LLM Flow: 1) package ambiguity snapshot and imagery; 2) request Jetson VLM confirmation; 3) receive classification with explanation metadata; 4) feed the verdict into scoring.
+  - Remote LLM Flow (when enabled): 1) package ambiguity snapshot and imagery; 2) request Jetson VLM confirmation; 3) receive classification with explanation metadata; 4) feed the verdict into scoring.
 - **Result Persistence**: `DataResultsSaver` writes enriched decisions to `storage/data_results/`, capturing image metadata, sensor deltas, FSM state, model tier usage, backend provenance, scores, and final classification for each frame.
 
 ## 3. Jetson Worker (Remote Inference Node)
@@ -53,7 +54,7 @@ The Jetson worker provides heavyweight YOLO and local VLM inference for frames e
   3. Multi-model inference: run each checkpoint, collecting detections per model.
   4. Aggregation: fuse detections into a consensus result and annotate with model provenance.
   5. Response packaging: return detections, tier metadata, sensor context echo, and any aggregation diagnostics.
-- **LLM Integration**: Production relies on the local vision-language model (VILA1.5-3b); the OpenAI API path is retained for testing only. The inference sequence is: 1) decode image bytes; 2) invoke the lightweight classifier facade; 3) build a prompt that blends sensor anomalies with flood cues; 4) run the local VLM inference; 5) respond with the predicted label and supporting details.
+- **LLM Integration**: When `USE_LLM_CONFIRMATION` is enabled, production relies on the local vision-language model (VILA1.5-3b); the OpenAI API path is retained for testing only. The inference sequence is: 1) decode image bytes; 2) invoke the lightweight classifier facade; 3) build a prompt that blends sensor anomalies with flood cues; 4) run the local VLM inference; 5) respond with the predicted label and supporting details.
   - *Local VLM Details*: Model path `jetson_worker/llm/models/VILA1.5-3b`, 4-bit quantization enabled, and lazy loading that initializes weights on the first LLM job or during optional preload at startup.
 - **Response Handling**: Each MQTT response includes the job id, tier, detections or VLM verdict, sensor echoes, latency metrics, and any error flags for the Processing Pi to ingest.
 - **Reliability Measures**: Single-job queue prevents backlog buildup, heartbeats expose liveness to the Pi, and graceful degradation routes errors back to the FSM so it can fall back to local processing.
@@ -66,8 +67,8 @@ The Jetson worker provides heavyweight YOLO and local VLM inference for frames e
   4. FSM normalizes the frame context and retrieves baselines.
   5. FSM selects a model tier and routing policy.
   6. Local or remote YOLO inference produces detections.
-  7. FSM computes scores, resolves conflicts, and triggers LLM confirmation when needed.
-  8. Remote VLM (if invoked) returns a consensus label.
+  7. FSM computes scores, resolves conflicts, and—when enabled—issues LLM confirmation requests for ambiguous states or the initial S2 entry.
+  8. Remote VLM (if invoked) returns a consensus label along with latency metadata.
   9. FSM updates state, finalizes the decision, and persists results.
   10. Decisions propagate to downstream monitoring and alerting.
 - MQTT topics in use: `sensor/data`, `inference/request`, `inference/response`, `inference/jetson/status`.
@@ -88,7 +89,7 @@ Example `storage/data_results/<date>/<camera>_<time>.json`:
 {
   "classification_result": {
     "prediction": 2,
-    "state": "flood",
+    "state": "S2",
     "model_tier": "medium",
     "scores": {
       "combined_score": 2.68,
@@ -101,8 +102,10 @@ Example `storage/data_results/<date>/<camera>_<time>.json`:
       "ambiguous": 3,
       "conflict": 3,
       "high": 3,
-      "low": 0
-    }
+      "low": 0,
+      "mid": 0
+    },
+    "s2_llm_confirmed": true
   },
   "metadata": {
     "camera_id": "CAM123",
@@ -130,7 +133,7 @@ Example `storage/data_results/<date>/<camera>_<time>.json`:
 ## 6. Configuration
 - Production defaults from `config.py`:
   - `CLASSIFICATION_MODE = "fsm"` keeps the finite-state strategy active.
-  - `USE_LLM_CONFIRMATION = True` enables VLM arbitration when ambiguity persists.
+  - `USE_LLM_CONFIRMATION = False` by default; set to `True` to enable the mandatory/optional LLM flows outlined above.
   - `IMAGE_SIZE = (640, 640)` aligns preprocessing across Pi and Jetson.
   - `LOCAL_YOLO_TIER = "small"` determines the highest tier retained locally.
   - `IMPORTANCE = {"energy": 0.33, "timeliness": 0.33, "accuracy": 0.34}` biases tier selection.
