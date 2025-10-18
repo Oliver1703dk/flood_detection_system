@@ -102,14 +102,30 @@ class FloodState(Enum):
 class FSMParams:
     """Configuration knobs controlling thresholds, counters and resources."""
 
-    threshold_low: float = 0.35
-    threshold_high: float = 0.65
-    frames_high: int = 2  # M consecutive high frames required for flood
-    frames_low: int = 2  # N consecutive low frames required to clear flood
-    frames_ambiguous: int = 2  # K consecutive ambiguous frames for escalation
-    model_cooldown: int = 1  # C frames between YOLO model switches
-    flap_window: int = 8  # W window for oscillation detection
-    resource_skip_ratio: int = 3  # Process 1 of N frames while constrained
+    threshold_low: float = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_low", 0.35)
+    )
+    threshold_high: float = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_high", 0.65)
+    )
+    frames_high: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_high", 3)
+    )  # M consecutive high frames required for flood
+    frames_low: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_low", 3)
+    )  # N consecutive low frames required to clear flood
+    frames_ambiguous: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_ambiguous", 3)
+    )  # K consecutive ambiguous frames for escalation
+    model_cooldown: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("model_cooldown", 1)
+    )  # C frames between YOLO model switches
+    flap_window: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("flap_window", 8)
+    )  # W window for oscillation detection
+    resource_skip_ratio: int = field(
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("resource_skip_ratio", 3)
+    )  # Process 1 of N frames while constrained
     accuracy_weight: float = field(
         default_factory=lambda: getattr(config, "IMPORTANCE", {}).get("accuracy", 0.34)
     )

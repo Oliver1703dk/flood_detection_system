@@ -9,7 +9,8 @@ configuration surface.
 - Runs `main_final.py` in collector mode to refresh `.env` secrets, read feature flags from `config.py`, and instantiate camera, Netatmo sensor (or simulator), metadata enrichment, and MQTT handlers.
 - Netatmo integration captures barometric pressure, temperature, humidity, CO2, and rainfall metrics; simulation mode produces bounded synthetic readings so downstream logic always receives realistic payloads.
 - Each acquisition cycle captures or synthesizes an image, gathers sensor readings, and enriches metadata with timestamps, GPS, motion hints, and resource flags.
-- `edge_data_collector.formatter.format_data` normalizes metadata, injects camera identifiers, encodes imagery as base64 JPEG, and packages the payload as `{image_data, sensor_data, metadata}` for the Processing Pi.
+- `edge_data_collector.formatter.format_data` publishes a dictionary with three top-level keys: `image_data` (base64-encoded JPEG for the current frame), `sensor_data` (static temperature, humidity, and pressure from `StaticSensorHandler`), and `metadata`.
+- MQTT `metadata` includes enrichment from `MetadataHandler.add_metadata` plus the video-specific fields populated in `main_video.py:310-337`: `timestamp` (ISO8601 send time), `location` (`"50.8503,4.3517"`), `camera_id` (`"video_camera_01"`), `motion` (`"slow"`), `resource_constrained` (`False`), `video_timestamp_sec` (aligned video second rounded to three decimals, `None` only when FPS is unavailable), and `video_file` (e.g., `"flood_video_20251005_150618.mp4"`).
 - When `USE_MQTT` is enabled, `edge_data_sender.transmission.mqtt_handler.MqttHandler` publishes the payload to the shared broker/topic; otherwise the payload prints for manual inspection.
 - Support scripts refresh Netatmo OAuth tokens, persist credentials to `.env`, and retain captured images under `edge_data_collector/camera/images` for replay.
 

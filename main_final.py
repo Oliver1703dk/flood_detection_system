@@ -1,5 +1,6 @@
 from datetime import datetime
 from dataclasses import asdict, is_dataclass
+from copy import deepcopy
 import os
 import json
 import base64
@@ -15,6 +16,7 @@ from cluster_data_receiver.validation.data_validator import DataValidator
 from cluster_data_receiver.storage.storage_manager import StorageManager
 from flood_classifier.baselinecalculator.baseline_calculator import BaselineCalculator
 from flood_classifier.postprocessing.data_result_saver import DataResultsSaver
+from flood_classifier.utils.metadata_utils import merge_metadata
 from flood_classifier.classification.strategies import (
     YoloSensorStrategy,
     LLMOnlyStrategy,
@@ -61,6 +63,7 @@ def process_message(message_payload, image_name=None):
         if isinstance(message_payload, bytes):
             message_payload = message_payload.decode("utf-8")
         message_json = json.loads(message_payload)
+        original_metadata = deepcopy(message_json.get("metadata", {}) or {})
         print("\n--- Received MQTT Message ---")
         # Optionally print the formatted JSON:
         # print(json.dumps(message_json, indent=4))
@@ -141,7 +144,9 @@ def process_message(message_payload, image_name=None):
 
     # Save results.
     saver = DataResultsSaver()
-    saver.save(message_json, printable_result)
+    result_payload = dict(message_json)
+    result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
+    saver.save(result_payload, printable_result)
 
     # -------------------------------------------
     # Update the Baselines Using Latest Data
