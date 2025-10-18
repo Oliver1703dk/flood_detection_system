@@ -93,6 +93,7 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     sensor_data = payload.get("sensor_data") or payload.get("metadata", {}).get("sensor_data")
     sensor_baseline = payload.get("sensor_baseline") or payload.get("metadata", {}).get("sensor_baseline")
+    metadata = payload.get("metadata") or {}
 
     image = _IMAGE_PROCESSOR.preprocess(image_b64)
     if image is None:
@@ -118,10 +119,19 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_by_model = {}
         for idx, model in enumerate(models, start=1):
-            results_by_model[idx] = model.run_inference(image, run_id=run_id)
+            results_by_model[idx] = model.run_inference(
+                image,
+                run_id=run_id,
+                metadata=metadata,
+            )
 
         results = _YOLO_AGGREGATOR.classify(results_by_model)
-        _YOLO_AGGREGATOR.draw_aggregated_bounding_boxes(image, results, run_id=run_id)
+        _YOLO_AGGREGATOR.draw_aggregated_bounding_boxes(
+            image,
+            results,
+            run_id=run_id,
+            metadata=metadata,
+        )
 
     formatted = _RESULT_FORMATTER.format_results(results)
 

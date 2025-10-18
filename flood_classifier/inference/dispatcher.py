@@ -172,6 +172,8 @@ class InferenceDispatcher:
         metadata = {
             "timestamp": ctx.metadata.get("timestamp"),
             "camera_id": ctx.metadata.get("camera_id"),
+            "video_file": ctx.metadata.get("video_file"),
+            "video_timestamp_sec": ctx.metadata.get("video_timestamp_sec"),
             "sensor_data": ctx.sensor_data,
             "sensor_baseline": ctx.metadata.get("sensor_baseline"),
         }
@@ -216,6 +218,8 @@ class InferenceDispatcher:
         metadata = {
             "timestamp": ctx.metadata.get("timestamp"),
             "camera_id": ctx.metadata.get("camera_id"),
+            "video_file": ctx.metadata.get("video_file"),
+            "video_timestamp_sec": ctx.metadata.get("video_timestamp_sec"),
         }
         result = self.remote_backend.run_llm(
             image_b64=encode_image_for_transport(image_bytes),

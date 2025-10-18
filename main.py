@@ -221,7 +221,8 @@ def main():
             try:
                 aggregated_results = multi_inference.run_all_inference(
                     preprocessed_image,
-                    image_name=current_message.get("image_name", config.IMAGE_NAME)
+                    image_name=current_message.get("image_name", config.IMAGE_NAME),
+                    metadata=current_message.get("metadata"),
                 )
                 print("YOLOv8 inference completed.")
             except Exception as e:

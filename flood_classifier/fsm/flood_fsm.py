@@ -345,11 +345,19 @@ class ModelManager:
         image_name = ctx.metadata.get("image_name", f"frame-{frame_index}")
 
         if self._multi_inference is not None:
-            results = self._multi_inference.run_all_inference(image, image_name=image_name)
+            results = self._multi_inference.run_all_inference(
+                image,
+                image_name=image_name,
+                metadata=ctx.metadata,
+            )
             active_tier = self._active_tier or requested_tier
         else:
             if hasattr(self._active_model, "run_inference"):
-                results = self._active_model.run_inference(image, image_name=image_name)
+                results = self._active_model.run_inference(
+                    image,
+                    image_name=image_name,
+                    metadata=ctx.metadata,
+                )
             else:
                 # Allow dependency injection in tests where run_inference is a callable.
                 results = self._active_model(image)

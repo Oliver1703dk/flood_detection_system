@@ -19,7 +19,10 @@ class YOLOv8Processor:
         preprocessed_image = self.image_processor.preprocess(input_data["image_data"])
 
         # Run inference
-        inference_results = self.inference_engine.run_inference(preprocessed_image)
+        inference_results = self.inference_engine.run_inference(
+            preprocessed_image,
+            metadata=input_data.get("metadata"),
+        )
 
         # Format results
         formatted_results = self.result_formatter.format_results(inference_results)

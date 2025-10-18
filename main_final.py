@@ -4,6 +4,7 @@ from copy import deepcopy
 import os
 import json
 import base64
+import time
 from sqlite3.dbapi2 import Timestamp
 import threading
 from typing import Optional, Tuple
@@ -58,6 +59,7 @@ def process_message(message_payload, image_name=None):
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
     """
+    start_time = time.perf_counter()
     try:
         # Decode payload (if it comes as bytes) and convert to JSON.
         if isinstance(message_payload, bytes):
@@ -103,7 +105,11 @@ def process_message(message_payload, image_name=None):
 
         try:
             multi_inference = MultiModelInference()
-            aggregated_results = multi_inference.run_all_inference(preprocessed_image, image_name)
+            aggregated_results = multi_inference.run_all_inference(
+                preprocessed_image,
+                image_name,
+                metadata=message_json.get("metadata"),
+            )
             print("YOLOv8 inference completed.")
         except Exception as e:
             print("Error during YOLOv8 inference:", e)
@@ -146,6 +152,9 @@ def process_message(message_payload, image_name=None):
     saver = DataResultsSaver()
     result_payload = dict(message_json)
     result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
+    pipeline_latency = time.perf_counter() - start_time
+    result_payload.setdefault("timing", {})["pipeline_latency_s"] = pipeline_latency
+    print(f"Pipeline latency: {pipeline_latency:.3f}s")
     saver.save(result_payload, printable_result)
 
     # -------------------------------------------

@@ -4,6 +4,8 @@ from datetime import datetime
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 
+from path_utils import sanitize_path_segment
+
 def _serialise_result(value):
     """Return a JSON-serialisable representation of ``value``."""
     if is_dataclass(value):
@@ -23,9 +25,11 @@ class DataResultsSaver:
     grouping files by the current observation date in the storage/data_results/ directory.
     """
 
-    def __init__(self, storage_dir="storage/data_results"):
+    def __init__(self, storage_dir="storage/data_results", video_storage_dir="storage/video_results"):
         self.storage_dir = storage_dir
+        self.video_storage_dir = video_storage_dir
         os.makedirs(self.storage_dir, exist_ok=True)
+        os.makedirs(self.video_storage_dir, exist_ok=True)
 
     def save(self, data, classification_result):
         """
@@ -42,22 +46,31 @@ class DataResultsSaver:
             "metadata": data.get("metadata", {}),
             "classification_result": _serialise_result(classification_result)
         }
+        timing_info = data.get("timing")
+        if timing_info:
+            result_data["timing"] = _serialise_result(timing_info)
         
         # Use the current UTC time for folder naming and filename.
         now = datetime.utcnow()
         date_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H-%M-%S")
-        
+
         # Extract camera_id from metadata if available.
         camera_id = result_data.get("metadata", {}).get("camera_id", "unknown")
-        
-        # Create a subfolder for today's date.
-        date_dir = os.path.join(self.storage_dir, date_str)
-        os.makedirs(date_dir, exist_ok=True)
+        video_file = result_data.get("metadata", {}).get("video_file")
+
+        if video_file:
+            safe_video_dir = sanitize_path_segment(video_file, fallback="unknown_video")
+            target_dir = os.path.join(self.video_storage_dir, safe_video_dir)
+        else:
+            # Create a subfolder for today's date.
+            target_dir = os.path.join(self.storage_dir, date_str)
+
+        os.makedirs(target_dir, exist_ok=True)
 
         # Create a safe filename using camera_id and the current time.
-        filename = f"{camera_id}_{time_str}.json"
-        filepath = os.path.join(date_dir, filename)
+        filename = f"{sanitize_path_segment(camera_id, fallback='unknown_camera')}_{time_str}.json"
+        filepath = os.path.join(target_dir, filename)
 
         # Save the result data to the JSON file.
         with open(filepath, "w") as f:

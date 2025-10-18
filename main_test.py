@@ -189,7 +189,11 @@ def main():
             #     for i in range(1, config.model_number+1)
             # ]
             try:
-                agg = MultiModelInference().run_all_inference(pre, image_name=message["image_name"])
+                agg = MultiModelInference().run_all_inference(
+                    pre,
+                    image_name=message["image_name"],
+                    metadata=message.get("metadata"),
+                )
             except Exception as e:
                 print("Error during inference:", e)
                 agg = None

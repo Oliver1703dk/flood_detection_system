@@ -80,7 +80,7 @@ class MultiModelInference:
         config.IMPORTANCE = importance
         self.reload_from_config()
 
-    def run_all_inference(self, image, image_name=config.IMAGE_NAME):
+    def run_all_inference(self, image, image_name=config.IMAGE_NAME, metadata=None):
         """
         Runs inference for all models on the given image, then aggregates their predictions
         using the YOLOv8FinalClassifier.
@@ -91,13 +91,24 @@ class MultiModelInference:
         results_dict = {}
         for model_id, inference_model in self.models.items():
             print(f"Running inference for model {model_id} on image {image_name}...")
-            results = inference_model.run_inference(image, image_name=image_name, run_id=run_id)
+            results = inference_model.run_inference(
+                image,
+                image_name=image_name,
+                run_id=run_id,
+                metadata=metadata,
+            )
             print(f"Model {model_id} detected {len(results)} objects.")
             results_dict[model_id] = results
         
         # Aggregate/fuse predictions from all models.
         final_classifier = YOLOv8FinalClassifier()
-        aggregated_results = final_classifier.classify_and_draw(results_dict, image, image_name=image_name, run_id=run_id)
+        aggregated_results = final_classifier.classify_and_draw(
+            results_dict,
+            image,
+            image_name=image_name,
+            run_id=run_id,
+            metadata=metadata,
+        )
 
         # aggregated_results = final_classifier.classify(results_dict)
         return aggregated_results

@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime
 from ultralytics import YOLO
 import config
+from path_utils import sanitize_path_segment
 from yolov8_processor.inference.label_normalizer import LabelNormalizer
 
 class YOLOv8Inference:
@@ -24,17 +25,17 @@ class YOLOv8Inference:
         self.model = YOLO(model_path)
         self.identifier = str(identifier)
 
-    def run_inference(self, image, image_name=config.IMAGE_NAME, run_id=None):
+    def run_inference(self, image, image_name=config.IMAGE_NAME, run_id=None, metadata=None):
         """Runs YOLOv8 inference on the given image."""
         _ = image_name  # compatibility; naming handled via run_id
         results = self.model(image)
         # Normalize the labels in the results
         normalizer = LabelNormalizer()
         results = normalizer.normalize(results)
-        self.draw_bounding_boxes(image, results, image_name=image_name, run_id=run_id)
+        self.draw_bounding_boxes(image, results, image_name=image_name, run_id=run_id, metadata=metadata)
         return results
 
-    def draw_bounding_boxes(self, image, results, image_name=config.IMAGE_NAME, run_id=None):
+    def draw_bounding_boxes(self, image, results, image_name=config.IMAGE_NAME, run_id=None, metadata=None):
         """
         Draws bounding boxes on the image based on YOLOv8 detections.
         Saves the image using the model identifier.
@@ -63,7 +64,14 @@ class YOLOv8Inference:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Persist each inference result with a unique timestamp-based filename.
+        metadata = metadata or {}
+        if not isinstance(metadata, dict):
+            metadata = dict(metadata)
+        video_file = metadata.get("video_file")
+
         output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        if video_file:
+            output_dir = output_dir / sanitize_path_segment(video_file, fallback="unknown_video")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")

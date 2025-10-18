@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import config  # Import config to access IMAGE_NAME
+from path_utils import sanitize_path_segment
 
 class AggregatedBox:
     def __init__(self, xywh, conf, cls, model_ids=None):
@@ -144,7 +145,7 @@ class YOLOv8FinalClassifier:
         y2 = y + h / 2
         return x1, y1, x2, y2
 
-    def draw_aggregated_bounding_boxes(self, image, aggregated_results, image_name=config.IMAGE_NAME, run_id=None):
+    def draw_aggregated_bounding_boxes(self, image, aggregated_results, image_name=config.IMAGE_NAME, run_id=None, metadata=None):
         """
         Draws aggregated bounding boxes on the provided image and saves the image.
         The image is saved to the same folder as your YOLOv8Inference output.
@@ -183,7 +184,15 @@ class YOLOv8FinalClassifier:
         
         _ = image_name  # compatibility; filenames derive from run_id now
 
+        metadata = metadata or {}
+        if not isinstance(metadata, dict):
+            metadata = dict(metadata)
+
+        video_file = metadata.get("video_file")
+
         output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        if video_file:
+            output_dir = output_dir / sanitize_path_segment(video_file, fallback="unknown_video")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -194,7 +203,7 @@ class YOLOv8FinalClassifier:
         print(f"Final aggregated output image saved to {save_path}")
         return image_8u
 
-    def classify_and_draw(self, results_dict, image, image_name=config.IMAGE_NAME, run_id=None):
+    def classify_and_draw(self, results_dict, image, image_name=config.IMAGE_NAME, run_id=None, metadata=None):
         """
         Combines classification and drawing of aggregated bounding boxes.
         
@@ -212,5 +221,6 @@ class YOLOv8FinalClassifier:
             aggregated_results,
             image_name=image_name,
             run_id=run_id,
+            metadata=metadata,
         )
         return aggregated_results
