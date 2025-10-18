@@ -76,3 +76,4 @@ class DataResultsSaver:
         with open(filepath, "w") as f:
             json.dump(result_data, f, indent=4)
         print(f"Data results saved to {filepath}")
+        return filepath

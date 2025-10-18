@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from time import perf_counter
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import config
@@ -203,6 +204,7 @@ class FrameDecision:
     backend_info: Dict[str, Any] = field(default_factory=dict)
     llm_backend_info: Dict[str, Any] = field(default_factory=dict)
     s2_llm_confirmed: bool = False
+    timing: Dict[str, float] = field(default_factory=dict)
 
 
 class ModelManager:
@@ -344,14 +346,19 @@ class ModelManager:
         image = self._preprocess(ctx)
         image_name = ctx.metadata.get("image_name", f"frame-{frame_index}")
 
+        inference_latency: Optional[float] = None
+        inference_start_wall = datetime.utcnow()
         if self._multi_inference is not None:
+            inference_start = perf_counter()
             results = self._multi_inference.run_all_inference(
                 image,
                 image_name=image_name,
                 metadata=ctx.metadata,
             )
+            inference_latency = perf_counter() - inference_start
             active_tier = self._active_tier or requested_tier
         else:
+            inference_start = perf_counter()
             if hasattr(self._active_model, "run_inference"):
                 results = self._active_model.run_inference(
                     image,
@@ -361,9 +368,17 @@ class ModelManager:
             else:
                 # Allow dependency injection in tests where run_inference is a callable.
                 results = self._active_model(image)
+            inference_latency = perf_counter() - inference_start
             active_tier = self._active_tier or requested_tier
 
         detections = self._format_detections(results, active_tier)
+        if inference_latency is not None:
+            metadata = backend_meta.setdefault("metadata", {})
+            metadata["latency_s"] = inference_latency
+            metadata["started_at"] = inference_start_wall.isoformat()
+            metadata["completed_at"] = datetime.utcnow().isoformat()
+            timing_block = metadata.setdefault("timing", {})
+            timing_block.setdefault("inference_s", inference_latency)
         return detections, active_tier, switched, backend_meta
 
 
@@ -471,7 +486,18 @@ class FloodFSM:
         )
         backend_name = backend_meta.get("backend", "local")
         backend_info = backend_meta.get("metadata", {})
+        timing_info: Dict[str, float] = {}
+        if isinstance(backend_info, dict):
+            latency_val = backend_info.get("latency_s")
+            if isinstance(latency_val, (int, float)):
+                timing_info["inference_s"] = float(latency_val)
+            backend_timing = backend_info.get("timing") if isinstance(backend_info, dict) else None
+            if isinstance(backend_timing, dict):
+                for key, value in backend_timing.items():
+                    if isinstance(value, (int, float)):
+                        timing_info[f"backend_{key}"] = float(value)
 
+        classification_phase_start = perf_counter()
         scores = self.classifier.classify_flood(
             sensor_data=ctx.sensor_data,
             detection_data=detections,
@@ -506,13 +532,17 @@ class FloodFSM:
             and self._llm_last_used.get(prev_state, -1) < self._frame_index - self.params.frames_ambiguous
             and self.state != FloodState.S5
         ):
+            llm_call_start = perf_counter()
+            llm_call_duration: Optional[float] = None
             try:
                 llm_result = self.dispatcher.run_remote_llm(
                     state=prev_state,
                     frame_index=self._frame_index,
                     ctx=ctx,
                 )
+                llm_call_duration = perf_counter() - llm_call_start
             except Exception as exc:
+                llm_call_duration = perf_counter() - llm_call_start
                 print(f"Remote LLM request failed ({exc}); continuing without LLM confirmation.")
                 llm_result = None
 
@@ -526,7 +556,12 @@ class FloodFSM:
                     llm_backend_info = {
                         "latency_s": llm_result.get("latency_s"),
                         "request_id": llm_result.get("request_id"),
+                        "sent_at": llm_result.get("sent_at"),
+                        "received_at": llm_result.get("received_at"),
+                        "timing": llm_result.get("timing"),
                     }
+                    if llm_call_duration is not None:
+                        llm_backend_info["duration_s"] = llm_call_duration
 
         next_state = self._determine_next_state(
             current_state=self.state,
@@ -557,6 +592,18 @@ class FloodFSM:
             self._resource_anchor_state = None
             self._resource_skip_cursor = 0
 
+        classification_duration = perf_counter() - classification_phase_start
+        timing_info["classification_s"] = classification_duration
+        llm_duration_val = llm_backend_info.get("duration_s") if isinstance(llm_backend_info, dict) else None
+        if isinstance(llm_duration_val, (int, float)):
+            timing_info["llm_s"] = float(llm_duration_val)
+        if isinstance(llm_backend_info, dict):
+            llm_backend_timing = llm_backend_info.get("timing")
+            if isinstance(llm_backend_timing, dict):
+                for key, value in llm_backend_timing.items():
+                    if isinstance(value, (int, float)):
+                        timing_info[f"llm_backend_{key}"] = float(value)
+
         decision = self._finalize_decision(
             base_decision=None,
             frame_index=self._frame_index,
@@ -581,6 +628,7 @@ class FloodFSM:
             backend_info=backend_info,
             llm_backend_info=llm_backend_info,
             s2_llm_confirmed=self._s2_llm_confirmed,
+            timing=timing_info,
         )
         self._last_decision = decision
         return decision
@@ -608,6 +656,7 @@ class FloodFSM:
             backend_info={},
             llm_backend_info={},
             s2_llm_confirmed=False,
+            timing={},
         )
 
     def _enforce_s2_confirmation(
@@ -646,13 +695,17 @@ class FloodFSM:
                 )
 
             llm_result: Optional[Dict[str, Any]]
+            llm_call_start = perf_counter()
+            llm_call_duration: Optional[float] = None
             try:
                 llm_result = self.dispatcher.run_remote_llm(
                     state=FloodState.S2,
                     frame_index=self._frame_index,
                     ctx=ctx,
                 )
+                llm_call_duration = perf_counter() - llm_call_start
             except Exception as exc:  # pragma: no cover - network/remote errors
+                llm_call_duration = perf_counter() - llm_call_start
                 print(f"Remote LLM confirmation failed ({exc}); postponing flood confirmation.")
                 llm_result = None
 
@@ -679,7 +732,12 @@ class FloodFSM:
             updated_backend = {
                 "latency_s": llm_result.get("latency_s"),
                 "request_id": llm_result.get("request_id"),
+                "sent_at": llm_result.get("sent_at"),
+                "received_at": llm_result.get("received_at"),
+                "timing": llm_result.get("timing"),
             }
+            if llm_call_duration is not None:
+                updated_backend["duration_s"] = llm_call_duration
             self._llm_last_used[FloodState.S2] = self._frame_index
 
             if confirm_prediction in (1, 2):
@@ -707,13 +765,17 @@ class FloodFSM:
             and self.params.accuracy_weight > max(self.params.timeliness_weight, self.params.energy_weight)
             and self._llm_last_used.get(FloodState.S2, -1) < self._frame_index - self.params.frames_ambiguous
         ):
+            llm_optional_start = perf_counter()
+            llm_optional_duration: Optional[float] = None
             try:
                 llm_result = self.dispatcher.run_remote_llm(
                     state=FloodState.S2,
                     frame_index=self._frame_index,
                     ctx=ctx,
                 )
+                llm_optional_duration = perf_counter() - llm_optional_start
             except Exception as exc:  # pragma: no cover - network/remote errors
+                llm_optional_duration = perf_counter() - llm_optional_start
                 print(f"Remote LLM request failed ({exc}); continuing without optional S2 confirmation.")
                 llm_result = None
             if llm_result:
@@ -728,7 +790,12 @@ class FloodFSM:
                     updated_backend = {
                         "latency_s": llm_result.get("latency_s"),
                         "request_id": llm_result.get("request_id"),
+                        "sent_at": llm_result.get("sent_at"),
+                        "received_at": llm_result.get("received_at"),
+                        "timing": llm_result.get("timing"),
                     }
+                    if llm_optional_duration is not None:
+                        updated_backend["duration_s"] = llm_optional_duration
                     self._llm_last_used[FloodState.S2] = self._frame_index
                     if optional_prediction in (1, 2):
                         updated_prediction = optional_prediction
@@ -761,6 +828,7 @@ class FloodFSM:
         backend_info: Optional[Dict[str, Any]] = None,
         llm_backend_info: Optional[Dict[str, Any]] = None,
         s2_llm_confirmed: bool = False,
+        timing: Optional[Dict[str, float]] = None,
     ) -> FrameDecision:
         if base_decision and skipped:
             return FrameDecision(
@@ -782,6 +850,7 @@ class FloodFSM:
                 backend_info=backend_info or base_decision.backend_info,
                 llm_backend_info=llm_backend_info or base_decision.llm_backend_info,
                 s2_llm_confirmed=s2_llm_confirmed,
+                timing=timing or base_decision.timing,
             )
         return FrameDecision(
             frame_index=frame_index,
@@ -802,6 +871,7 @@ class FloodFSM:
             backend_info=backend_info or {},
             llm_backend_info=llm_backend_info or {},
             s2_llm_confirmed=s2_llm_confirmed,
+            timing=timing or {},
         )
 
     def _choose_tier(self, motion: MotionState, *, resource_flag: bool) -> ModelTier:
@@ -1018,4 +1088,5 @@ def decision_to_dict(decision: FrameDecision) -> Dict[str, Any]:
         "backend_info": decision.backend_info,
         "llm_backend_info": decision.llm_backend_info,
         "s2_llm_confirmed": decision.s2_llm_confirmed,
+        "timing": decision.timing,
     }

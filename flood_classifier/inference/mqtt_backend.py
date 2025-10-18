@@ -29,6 +29,8 @@ class MQTTResponse:
 
     data: Dict[str, object]
     latency_s: float
+    sent_at: float
+    received_at: float
 
 
 class MQTTInferenceClient:
@@ -110,9 +112,10 @@ class MQTTInferenceClient:
             event = self._pending.get(correlation_id)
             if event is None:
                 return
-            sent_at = self._sent_at.get(correlation_id, time.time())
-            latency = time.time() - sent_at
-            self._payloads[correlation_id] = MQTTResponse(payload, latency)
+            received_at = time.time()
+            sent_at = self._sent_at.get(correlation_id, received_at)
+            latency = received_at - sent_at
+            self._payloads[correlation_id] = MQTTResponse(payload, latency, sent_at, received_at)
             event.set()
 
     # ------------------------------------------------------------------

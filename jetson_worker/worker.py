@@ -95,10 +95,14 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     sensor_baseline = payload.get("sensor_baseline") or payload.get("metadata", {}).get("sensor_baseline")
     metadata = payload.get("metadata") or {}
 
+    metrics = payload.setdefault("_timing", {})
+    preprocess_start = time.perf_counter()
     image = _IMAGE_PROCESSOR.preprocess(image_b64)
+    metrics["preprocess_s"] = time.perf_counter() - preprocess_start
     if image is None:
         raise ValueError("Failed to decode image for YOLO inference")
 
+    inference_start = time.perf_counter()
     with _YOLO_LOCK:
         models = _YOLO_MODELS.get(tier_value)
         if not models:
@@ -132,8 +136,10 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             run_id=run_id,
             metadata=metadata,
         )
-
+    metrics["inference_s"] = time.perf_counter() - inference_start
+    format_start = time.perf_counter()
     formatted = _RESULT_FORMATTER.format_results(results)
+    metrics["result_format_s"] = time.perf_counter() - format_start
 
     # Ensure model provenance is carried through for downstream fusion logic.
     for det in formatted:
@@ -162,7 +168,10 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Missing image data for LLM inference")
 
     try:
+        metrics = payload.setdefault("_timing", {})
+        decode_start = time.perf_counter()
         image_bytes = base64.b64decode(image_b64)
+        metrics["preprocess_s"] = metrics.get("preprocess_s", 0.0) + (time.perf_counter() - decode_start)
     except Exception as exc:
         raise ValueError("Invalid base64 image data for LLM inference") from exc
 
@@ -178,13 +187,14 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             _LLM_CLASSIFIER = create_llm_classifier(
                 raise_exceptions=False,
             )
-
+        llm_start = time.perf_counter()
         prediction = _LLM_CLASSIFIER.classify_flood(
             image_bytes,
             sensor_data=sensor_data,
             sensor_baseline=sensor_baseline,
             sensor_anomalies=sensor_anomalies,
         )
+        metrics["llm_inference_s"] = time.perf_counter() - llm_start
 
     return {"prediction": prediction}
 
@@ -261,6 +271,9 @@ class JetsonWorker:
         task = payload.get("task")
 
         _log(f"Received task '{task}' (job id: {job_id}); queueing for worker thread")
+        metrics = payload.setdefault("_timing", {})
+        metrics["received_ts"] = time.time()
+        metrics["received_perf"] = time.perf_counter()
         superseded = self._enqueue_job(payload)
         if superseded is not None:
             self._publish_superseded(superseded)
@@ -275,6 +288,9 @@ class JetsonWorker:
 
     def _enqueue_job(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         with self._job_lock:
+            metrics = payload.setdefault("_timing", {})
+            metrics["enqueue_ts"] = time.time()
+            metrics["enqueue_perf"] = time.perf_counter()
             superseded = self._latest_job
             self._latest_job = payload
             self._job_event.set()
@@ -294,6 +310,10 @@ class JetsonWorker:
                 if self._stop.is_set():
                     break
                 continue
+            metrics = job.setdefault("_timing", {})
+            enqueue_perf = metrics.get("enqueue_perf") or metrics.get("received_perf")
+            if enqueue_perf is not None:
+                metrics["queue_wait_s"] = max(0.0, time.perf_counter() - enqueue_perf)
             self._process_payload(job)
 
     def _process_payload(self, payload: Dict[str, Any]) -> None:
@@ -301,6 +321,9 @@ class JetsonWorker:
         task = payload.get("task")
 
         _log(f"Processing task '{task}' (job id: {job_id})")
+        metrics = payload.setdefault("_timing", {})
+        metrics["process_start_ts"] = time.time()
+        process_start_perf = time.perf_counter()
         response: Dict[str, Any] = {"id": job_id, "error": None}
         try:
             if task == "yolo":
@@ -313,6 +336,29 @@ class JetsonWorker:
         except Exception as exc:  # pragma: no cover - hardware specific failures
             response["error"] = str(exc)
             _log(f"Task '{task}' failed: {exc}")
+
+        metrics["compute_s"] = time.perf_counter() - process_start_perf
+        metrics["process_end_ts"] = time.time()
+        total_runtime = metrics.get("compute_s", 0.0)
+        if "queue_wait_s" in metrics:
+            total_runtime += metrics["queue_wait_s"]
+        metrics["total_runtime_s"] = total_runtime
+
+        export_fields = {
+            "queue_wait_s": metrics.get("queue_wait_s"),
+            "preprocess_s": metrics.get("preprocess_s"),
+            "inference_s": metrics.get("inference_s"),
+            "result_format_s": metrics.get("result_format_s"),
+            "llm_inference_s": metrics.get("llm_inference_s"),
+            "compute_s": metrics.get("compute_s"),
+            "total_runtime_s": metrics.get("total_runtime_s"),
+            "received_ts": metrics.get("received_ts"),
+            "process_start_ts": metrics.get("process_start_ts"),
+            "process_end_ts": metrics.get("process_end_ts"),
+        }
+        response["timing"] = {k: v for k, v in export_fields.items() if v is not None}
+        for transient_key in ("received_perf", "enqueue_perf"):
+            metrics.pop(transient_key, None)
 
         response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
         self.client.publish(response_topic, json.dumps(response), qos=QOS)

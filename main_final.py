@@ -34,17 +34,18 @@ class LatestPayloadBuffer:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._latest: Optional[Tuple[str, bytes]] = None
+        self._latest: Optional[Tuple[str, bytes, float]] = None
         self._available = threading.Event()
 
-    def offer(self, topic: str, payload: bytes) -> Optional[Tuple[str, bytes]]:
+    def offer(self, topic: str, payload: bytes) -> Optional[Tuple[str, bytes, float]]:
         with self._lock:
             superseded = self._latest
-            self._latest = (topic, payload)
+            now = time.perf_counter()
+            self._latest = (topic, payload, now)
             self._available.set()
             return superseded
 
-    def take(self, timeout: float = 0.5) -> Optional[Tuple[str, bytes]]:
+    def take(self, timeout: float = 0.5) -> Optional[Tuple[str, bytes, float]]:
         if not self._available.wait(timeout=timeout):
             return None
         with self._lock:
@@ -54,11 +55,12 @@ class LatestPayloadBuffer:
             return item
 
 
-def process_message(message_payload, image_name=None):
+def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0):
     """
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
     """
+    process_start_ts = time.time()
     start_time = time.perf_counter()
     try:
         # Decode payload (if it comes as bytes) and convert to JSON.
@@ -89,6 +91,8 @@ def process_message(message_payload, image_name=None):
     # Image Preprocessing & YOLOv8 Inference (only for YOLO+sensor mode)
     # -------------------------------------------
     detection_results = []
+    preprocess_time = None
+    format_time = None
     classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
     if classification_mode == "yolo_sensor":
         from yolov8_processor.preprocessing.image_processor import ImageProcessor
@@ -97,7 +101,9 @@ def process_message(message_payload, image_name=None):
 
         image_processor = ImageProcessor()
         try:
+            preprocess_start = time.perf_counter()
             preprocessed_image = image_processor.preprocess(message_json["image_data"])
+            preprocess_time = time.perf_counter() - preprocess_start
             print("Image preprocessed for inference.")
         except Exception as e:
             print("Error in image preprocessing:", e)
@@ -116,11 +122,12 @@ def process_message(message_payload, image_name=None):
             aggregated_results = None
 
         result_formatter = ResultFormatter()
-        detection_results = (
-            result_formatter.format_results(aggregated_results)
-            if aggregated_results
-            else []
-        )
+        if aggregated_results:
+            format_start = time.perf_counter()
+            detection_results = result_formatter.format_results(aggregated_results)
+            format_time = time.perf_counter() - format_start
+        else:
+            detection_results = []
         print("\n--- YOLOv8 Detection Results ---")
         print(detection_results)
     else:
@@ -139,7 +146,9 @@ def process_message(message_payload, image_name=None):
         return
 
     strategy = strategy_cls()
+    classification_start = time.perf_counter()
     final_result = strategy.classify(detection_results, message_json)
+    classification_time = time.perf_counter() - classification_start
 
     if isinstance(final_result, FrameDecision):
         printable_result = decision_to_dict(final_result)
@@ -153,9 +162,49 @@ def process_message(message_payload, image_name=None):
     result_payload = dict(message_json)
     result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
     pipeline_latency = time.perf_counter() - start_time
-    result_payload.setdefault("timing", {})["pipeline_latency_s"] = pipeline_latency
-    print(f"Pipeline latency: {pipeline_latency:.3f}s")
-    saver.save(result_payload, printable_result)
+    timing_payload = result_payload.setdefault("timing", {})
+    timing_payload["process_start_ts"] = process_start_ts
+    timing_payload["pipeline_latency_s"] = pipeline_latency
+    timing_payload["queue_wait_s"] = queue_wait_s
+    if preprocess_time is not None:
+        timing_payload["preprocess_s"] = preprocess_time
+    if format_time is not None:
+        timing_payload["result_format_s"] = format_time
+    timing_payload["classification_s"] = classification_time
+    if isinstance(final_result, FrameDecision):
+        for key, value in final_result.timing.items():
+            if isinstance(value, (int, float)):
+                timing_payload[f"fsm_{key}"] = value
+        backend_info = final_result.backend_info or {}
+        if isinstance(backend_info, dict):
+            latency_val = backend_info.get("latency_s")
+            if isinstance(latency_val, (int, float)):
+                timing_payload["backend_latency_s"] = latency_val
+            backend_timing = backend_info.get("timing")
+            if isinstance(backend_timing, dict):
+                for key, value in backend_timing.items():
+                    if isinstance(value, (int, float)):
+                        timing_payload[f"backend_{key}"] = value
+            sent_at = backend_info.get("sent_at")
+            received_at = backend_info.get("received_at")
+            if isinstance(sent_at, (int, float)) and isinstance(received_at, (int, float)):
+                timing_payload["backend_roundtrip_s"] = received_at - sent_at
+        llm_backend = final_result.llm_backend_info or {}
+        if isinstance(llm_backend, dict):
+            llm_latency = llm_backend.get("latency_s")
+            if isinstance(llm_latency, (int, float)):
+                timing_payload["llm_latency_s"] = llm_latency
+            llm_timing = llm_backend.get("timing")
+            if isinstance(llm_timing, dict):
+                for key, value in llm_timing.items():
+                    if isinstance(value, (int, float)):
+                        timing_payload[f"llm_backend_{key}"] = value
+            llm_sent = llm_backend.get("sent_at")
+            llm_received = llm_backend.get("received_at")
+            if isinstance(llm_sent, (int, float)) and isinstance(llm_received, (int, float)):
+                timing_payload["llm_roundtrip_s"] = llm_received - llm_sent
+    print(f"Pipeline latency: {pipeline_latency:.3f}s (queue wait {queue_wait_s:.3f}s)")
+    saved_path = saver.save(result_payload, printable_result)
 
     # -------------------------------------------
     # Update the Baselines Using Latest Data
@@ -166,11 +215,25 @@ def process_message(message_payload, image_name=None):
         tau=12
     )
     print("\n🔄 Updating sensor baselines...")
+    baseline_start = time.perf_counter()
     current_baselines = baseline_calculator.update_baselines()
+    baseline_duration = time.perf_counter() - baseline_start
+    timing_payload["baseline_update_s"] = baseline_duration
     if current_baselines:
         print("✅ Updated Baselines:", current_baselines)
     else:
         print("❌ Baseline update failed (no stable period found).")
+    timing_payload["baseline_update_s"] = baseline_duration
+    if saved_path:
+        try:
+            with open(saved_path, "r+", encoding="utf-8") as f:
+                saved_data = json.load(f)
+                saved_data.setdefault("timing", {})["baseline_update_s"] = baseline_duration
+                f.seek(0)
+                json.dump(saved_data, f, indent=4)
+                f.truncate()
+        except Exception as exc:
+            print(f"Warning: failed to update baseline timing in {saved_path}: {exc}")
     print("\n--- Final Flood Classification ---")
     print(printable_result)
 
@@ -206,7 +269,8 @@ def main():
             item = latest_messages.take()
             if item is None:
                 continue
-            _, payload = item
+            topic, payload, offered_at = item
+            queue_wait_s = time.perf_counter() - offered_at if offered_at is not None else 0.0
             try:
                 config.IMAGE_NAME = (
                     "MQTT_Image"
@@ -216,7 +280,11 @@ def main():
             except Exception:
                 config.IMAGE_NAME = "MQTT_Image"
             try:
-                process_message(payload, image_name=config.IMAGE_NAME)
+                process_message(
+                    payload,
+                    image_name=config.IMAGE_NAME,
+                    queue_wait_s=queue_wait_s,
+                )
             except Exception as exc:
                 print(f"Error processing buffered message: {exc}")
 

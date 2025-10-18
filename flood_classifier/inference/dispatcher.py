@@ -80,6 +80,9 @@ class MQTTJetsonBackend:
             "detections": data.get("detections", []),
             "latency_s": response.latency_s,
             "request_id": data.get("id"),
+            "sent_at": response.sent_at,
+            "received_at": response.received_at,
+            "timing": data.get("timing"),
         }
 
     def run_llm(
@@ -111,6 +114,9 @@ class MQTTJetsonBackend:
             "prediction": data.get("prediction"),
             "latency_s": response.latency_s,
             "request_id": data.get("id"),
+            "sent_at": response.sent_at,
+            "received_at": response.received_at,
+            "timing": data.get("timing"),
         }
 
 
@@ -195,6 +201,9 @@ class InferenceDispatcher:
             metadata={
                 "latency_s": result.get("latency_s"),
                 "request_id": result.get("request_id"),
+                "sent_at": result.get("sent_at"),
+                "received_at": result.get("received_at"),
+                "timing": result.get("timing"),
             },
         )
 
