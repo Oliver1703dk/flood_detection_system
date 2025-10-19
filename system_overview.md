@@ -27,6 +27,10 @@ The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives th
   1. Preprocessing: decode the base64 image, resize to the configured `IMAGE_SIZE`, and normalize channels.
   2. Multi-model inference: execute the configured checkpoints for the selected tier, using cached models when available.
   3. Aggregation: merge detections across checkpoints, propagate model provenance, and align detections with sensor context.
+     - Raw YOLO boxes below `0.03` confidence are dropped immediately so only credible detections participate in fusion.
+     - The remaining boxes are flattened across models and grouped when their IoU is ≥ 0.5; each group collapses into a single consensus box using a confidence-weighted average in `xywh` space.
+     - Aggregated boxes retain the summed confidence (used as the vote strength) and the contributing model identifiers, exposing agreement counts that later stages surface as `M=<count>` overlays and as part of the scoring consensus bonus.
+     - The fused output mirrors the standard YOLO schema, allowing the FSM, storage layer, and Jetson worker to consume a unified format while still benefiting from multi-model redundancy and provenance tracking.
   4. Formatting: emit normalized detection objects ready for fusion and persistence.
   - *Tier Lineup*: Nano – emergency-only minimal load; Small – Pi-resident default; Medium – remote precision tier; Large – heavy Jetson tier for complex frames.
 - **Baseline Calculation**: The baseline calculator scans `storage/data_results/`, groups historical sensor readings into diurnal windows (pre-dawn, midday, evening, night), computes exponentially weighted moving averages, and persists the consolidated values to `storage/sensor_baselines.json`.
