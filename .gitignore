@@ -2,7 +2,7 @@
 jetson_worker/llm/models/
 
 # Storage folder
-storage/
+storage/data/
 test_dataset/
 test_image/
 test_images/

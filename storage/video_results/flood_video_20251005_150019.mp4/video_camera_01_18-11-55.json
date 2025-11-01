@@ -1,0 +1,119 @@
+{
+    "sensor_data": {
+        "temperature": 12.0,
+        "humidity": 88.0,
+        "pressure": 995.0
+    },
+    "metadata": {
+        "timestamp": "2025-10-19T20:11:54.214213",
+        "location": "50.8503,4.3517",
+        "camera_id": "video_camera_01",
+        "motion": "slow",
+        "resource_constrained": false,
+        "video_timestamp_sec": 0.5,
+        "video_file": "flood_video_20251005_150019.mp4",
+        "sensor_baseline": {
+            "temperature_baseline": 17.0,
+            "humidity_baseline": 78.0,
+            "pressure_baseline": 1016.0
+        },
+        "sensor_data": {
+            "temperature": 12.0,
+            "humidity": 88.0,
+            "pressure": 995.0
+        },
+        "sensor_anomalies": {
+            "delta_temperature": -5.0,
+            "delta_humidity": 10.0,
+            "delta_pressure": -21.0
+        }
+    },
+    "classification_result": {
+        "frame_index": 50,
+        "state": "S1",
+        "model_tier": "medium",
+        "prediction": 0,
+        "scores": {
+            "combined_score": 0.2473033807977762,
+            "image_score": 0.13730338079777618,
+            "sensor_boost": 0.11
+        },
+        "counters": {
+            "high": 0,
+            "low": 1,
+            "ambiguous": 0,
+            "conflict": 0,
+            "mid": 0
+        },
+        "llm_used": false,
+        "llm_prediction": null,
+        "conflict": false,
+        "drift": false,
+        "flapping": false,
+        "skipped": false,
+        "model_switched": false,
+        "tier_requested": "medium",
+        "backend": "remote",
+        "backend_info": {
+            "latency_s": 0.429171085357666,
+            "request_id": "fac072137a904dcc8a48604b22c951d8",
+            "sent_at": 1760897515.4697492,
+            "received_at": 1760897515.8989203,
+            "timing": {
+                "queue_wait_s": 0.00026104100106749684,
+                "preprocess_s": 0.048917976000666386,
+                "inference_s": 0.3757587620020786,
+                "result_format_s": 4.0866998460842296e-05,
+                "compute_s": 0.42484481199790025,
+                "total_runtime_s": 0.42510585299896775,
+                "received_ts": 1760897515.5041811,
+                "process_start_ts": 1760897515.5047941,
+                "process_end_ts": 1760897515.9296448
+            }
+        },
+        "llm_backend_info": {},
+        "s2_llm_confirmed": false,
+        "timing": {
+            "inference_s": 0.429171085357666,
+            "backend_queue_wait_s": 0.00026104100106749684,
+            "backend_preprocess_s": 0.048917976000666386,
+            "backend_inference_s": 0.3757587620020786,
+            "backend_result_format_s": 4.0866998460842296e-05,
+            "backend_compute_s": 0.42484481199790025,
+            "backend_total_runtime_s": 0.42510585299896775,
+            "backend_received_ts": 1760897515.5041811,
+            "backend_process_start_ts": 1760897515.5047941,
+            "backend_process_end_ts": 1760897515.9296448,
+            "classification_s": 0.003780303999519674
+        }
+    },
+    "timing": {
+        "process_start_ts": 1760897515.4537978,
+        "pipeline_latency_s": 0.44915882799978135,
+        "queue_wait_s": 5.570400026044808e-05,
+        "classification_s": 0.4403222350010765,
+        "fsm_inference_s": 0.429171085357666,
+        "fsm_backend_queue_wait_s": 0.00026104100106749684,
+        "fsm_backend_preprocess_s": 0.048917976000666386,
+        "fsm_backend_inference_s": 0.3757587620020786,
+        "fsm_backend_result_format_s": 4.0866998460842296e-05,
+        "fsm_backend_compute_s": 0.42484481199790025,
+        "fsm_backend_total_runtime_s": 0.42510585299896775,
+        "fsm_backend_received_ts": 1760897515.5041811,
+        "fsm_backend_process_start_ts": 1760897515.5047941,
+        "fsm_backend_process_end_ts": 1760897515.9296448,
+        "fsm_classification_s": 0.003780303999519674,
+        "backend_latency_s": 0.429171085357666,
+        "backend_queue_wait_s": 0.00026104100106749684,
+        "backend_preprocess_s": 0.048917976000666386,
+        "backend_inference_s": 0.3757587620020786,
+        "backend_result_format_s": 4.0866998460842296e-05,
+        "backend_compute_s": 0.42484481199790025,
+        "backend_total_runtime_s": 0.42510585299896775,
+        "backend_received_ts": 1760897515.5041811,
+        "backend_process_start_ts": 1760897515.5047941,
+        "backend_process_end_ts": 1760897515.9296448,
+        "backend_roundtrip_s": 0.429171085357666,
+        "baseline_update_s": 0.0009489280018897261
+    }
+}
