@@ -184,6 +184,13 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
                 for key, value in backend_timing.items():
                     if isinstance(value, (int, float)):
                         timing_payload[f"backend_{key}"] = value
+            # Create alias for YOLO energy from backend timing (for local Pi inference)
+            if "backend_yolo_energy_j" in timing_payload and "yolo_energy_j" not in timing_payload:
+                timing_payload["yolo_energy_j"] = timing_payload["backend_yolo_energy_j"]
+            if "backend_yolo_power_w" in timing_payload and "yolo_power_w" not in timing_payload:
+                timing_payload["yolo_power_w"] = timing_payload["backend_yolo_power_w"]
+            if "backend_yolo_cpu_util_%" in timing_payload and "yolo_cpu_util_%" not in timing_payload:
+                timing_payload["yolo_cpu_util_%"] = timing_payload["backend_yolo_cpu_util_%"]
             sent_at = backend_info.get("sent_at")
             received_at = backend_info.get("received_at")
             if isinstance(sent_at, (int, float)) and isinstance(received_at, (int, float)):
