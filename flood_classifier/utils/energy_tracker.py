@@ -117,14 +117,14 @@ class EnergyTracker:
                     }
                 
                 # Extract energy in Joules (emissions_data gives energy in kWh)
-                energy_kwh = emissions_data.get("energy_consumed", 0.0) or 0.0
+                energy_kwh = emissions_data.energy_consumed or 0.0
                 energy_j = energy_kwh * 3.6e6 if energy_kwh else None  # kWh to Joules
                 
                 # Get CPU utilization % (snapshot at end; approx average)
                 cpu_util = self.get_cpu_utilization()
                 
                 # Calculate average power if we have duration
-                duration_s = emissions_data.get("duration", 0.0) or 0.0
+                duration_s = emissions_data.duration or 0.0
                 power_w = (energy_j / duration_s) if (energy_j and duration_s > 0) else None
                 
                 return {
@@ -140,11 +140,11 @@ class EnergyTracker:
                     "cpu_util_%": None,
                 }
     
-    def _stop_tracker(self) -> Optional[Dict[str, Any]]:
+    def _stop_tracker(self) -> Optional[Any]:
         """Stop the tracker and return emissions data.
         
         Returns:
-            Dict with emissions/energy data or None if tracking failed.
+            EmissionsData object or None if tracking failed.
         """
         if not self._tracker:
             return None
