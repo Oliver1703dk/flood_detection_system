@@ -8,11 +8,12 @@ from contextlib import contextmanager
 from typing import Dict, Optional, Any, Iterator
 
 try:
-    from codecarbon import EmissionsTracker
+    from codecarbon import EmissionsTracker, OfflineEmissionsTracker
     CODECARBON_AVAILABLE = True
 except ImportError:
     CODECARBON_AVAILABLE = False
-    EmissionsTracker = None  # type: ignore
+    EmissionsTracker = None
+    OfflineEmissionsTracker = None  # type: ignore
 
 import psutil
 
@@ -62,14 +63,23 @@ class EnergyTracker:
                 self._stop_tracker()
             
             try:
-                # Configure codecarbon for Raspberry Pi offline mode
-                # We'll track CPU energy only, no cloud emissions
-                self._tracker = EmissionsTracker(
-                    save_to_file=False,  # Don't save CSV files
-                    offline=self.offline,  # No cloud API calls
-                    log_level="error",  # Suppress verbose logging
-                    measure_power_secs=0.1,  # Sample every 100ms
-                )
+                # Configure codecarbon for Raspberry Pi
+                kwargs = {
+                    "save_to_file": False,  # Don't save CSV files
+                    "log_level": "error",   # Suppress verbose logging
+                    "measure_power_secs": 0.1,  # Sample every 100ms
+                    "tracking_mode": "process",  # Per-process for Pi accuracy
+                }
+                
+                if self.offline:
+                    # Use OfflineEmissionsTracker for no-internet carbon intensity
+                    kwargs["country_iso_code"] = os.getenv("CODECARBON_COUNTRY_ISO", "USA")  # Adjust default
+                    self._tracker = OfflineEmissionsTracker(**kwargs)
+                else:
+                    # Online mode (no upload)
+                    kwargs["save_to_api"] = False
+                    self._tracker = EmissionsTracker(**kwargs)
+                
                 self._tracker.start()
                 self._active = True
             except Exception as e:
@@ -110,8 +120,8 @@ class EnergyTracker:
                 energy_kwh = emissions_data.get("energy_consumed", 0.0) or 0.0
                 energy_j = energy_kwh * 3.6e6 if energy_kwh else None  # kWh to Joules
                 
-                # Get CPU utilization (average during measurement)
-                cpu_util = emissions_data.get("cpu_power", 0.0) or 0.0
+                # Get CPU utilization % (snapshot at end; approx average)
+                cpu_util = self.get_cpu_utilization()
                 
                 # Calculate average power if we have duration
                 duration_s = emissions_data.get("duration", 0.0) or 0.0
@@ -194,6 +204,7 @@ def get_default_energy_tracker() -> EnergyTracker:
     global _default_tracker
     if _default_tracker is None:
         _default_tracker = EnergyTracker(offline=True)
+        # Set CODECARBON_COUNTRY_ISO env var for your location (e.g., "GBR" for UK)
     return _default_tracker
 
 
