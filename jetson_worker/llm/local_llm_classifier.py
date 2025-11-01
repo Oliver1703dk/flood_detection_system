@@ -1,17 +1,143 @@
-"""Local vision-language model inference using VILA or similar models.
+"""Local vision-language model inference with pluggable backends.
 
-This module provides a drop-in replacement for the OpenAI-based LLMImageClassifier
-that runs entirely on the Jetson using models like VILA1.5-3B.
+This module provides a drop-in replacement for the OpenAI-based
+LLMImageClassifier that runs entirely on local hardware. Backends can be
+registered to support different vision-language models (VLMs). The current
+implementation ships with support for the Moondream family.
 """
 from __future__ import annotations
 
 import io
-import os
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
 import torch
 from PIL import Image
+
+
+class _BaseBackend:
+    """Backend interface for loading and running specific VLM families."""
+
+    name: str = "base"
+
+    def load(
+        self,
+        model_name: str,
+        device: str,
+        use_4bit: bool,
+    ):
+        """Return (processor, model) ready for inference."""
+        raise NotImplementedError
+
+    def build_inputs(
+        self,
+        processor,
+        image: Image.Image,
+        prompt: str,
+        device: str,
+    ):
+        """Prepare inputs for model.generate."""
+        return processor(
+            images=image,
+            text=prompt,
+            return_tensors="pt",
+        ).to(device)
+
+    def generate(self, model, inputs):
+        """Generate text tokens from the model."""
+        with torch.no_grad():
+            return model.generate(
+                **inputs,
+                max_new_tokens=60,
+                do_sample=False,
+            )
+
+    def decode(self, processor, output_ids):
+        """Convert generated token ids back into text."""
+        return processor.batch_decode(
+            output_ids,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False,
+        )
+
+
+class _MoondreamBackend(_BaseBackend):
+    """Backend for Moondream VLMs."""
+
+    name = "moondream"
+
+    def load(
+        self,
+        model_name: str,
+        device: str,
+        use_4bit: bool,
+    ):
+        from transformers import AutoModelForCausalLM, AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(
+            model_name,
+            trust_remote_code=True,
+        )
+
+        load_kwargs: Dict[str, Any] = {
+            "trust_remote_code": True,
+        }
+
+        if use_4bit and device == "cuda":
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError as exc:
+                raise ImportError(
+                    "bitsandbytes is required for 4-bit Moondream inference. "
+                    "Disable LOCAL_LLM_USE_4BIT or install bitsandbytes."
+                ) from exc
+
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+
+            load_kwargs.update(
+                quantization_config=quantization_config,
+                torch_dtype=torch.float16,
+                device_map="auto",
+            )
+        else:
+            dtype = torch.float16 if device == "cuda" else torch.float32
+            load_kwargs.update(torch_dtype=dtype)
+
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            **load_kwargs,
+        )
+
+        if "device_map" not in load_kwargs:
+            model.to(device)
+
+        model.eval()
+        return processor, model
+
+    def build_inputs(
+        self,
+        processor,
+        image: Image.Image,
+        prompt: str,
+        device: str,
+    ):
+        # Moondream processors accept image first, then prompt.
+        inputs = processor(
+            image,
+            prompt,
+            return_tensors="pt",
+        )
+        return {k: v.to(device) for k, v in inputs.items()}
+
+
+SUPPORTED_BACKENDS: Dict[str, _BaseBackend] = {
+    _MoondreamBackend.name: _MoondreamBackend(),
+}
 
 
 class LocalVLMClassifier:
@@ -24,9 +150,7 @@ class LocalVLMClassifier:
     ----------
     model_name:
         The model to use. Options:
-        - "Efficient-Large-Model/VILA1.5-3b" (recommended for Jetson)
-        - "Efficient-Large-Model/VILA-7b" (if you have more memory)
-        - Any other HuggingFace vision-language model
+        - Path or repo id for the selected backend (e.g., Moondream)
     device:
         Device to run on ('cuda', 'cpu', or None for auto-detect)
     default_label:
@@ -35,15 +159,18 @@ class LocalVLMClassifier:
         If True, raise exceptions instead of returning default_label
     use_4bit:
         Use 4-bit quantization to reduce memory usage (recommended for Jetson)
+    backend:
+        Identifier for the backend implementation to use.
     """
 
     def __init__(
         self,
-        model_name: str = "VILA1.5-3b",
+        model_name: str = "moondream",
         device: Optional[str] = None,
         default_label: int = 0,
         raise_exceptions: bool = False,
         use_4bit: bool = True,
+        backend: str = "moondream",
     ) -> None:
         requested_path = Path(model_name).expanduser()
         module_dir = Path(__file__).resolve().parent
@@ -60,6 +187,14 @@ class LocalVLMClassifier:
         self.default_label = default_label
         self.raise_exceptions = raise_exceptions
         self.use_4bit = use_4bit
+        backend_key = backend.lower()
+        if backend_key not in SUPPORTED_BACKENDS:
+            raise ValueError(
+                f"Unsupported local VLM backend '{backend}'. "
+                f"Available: {', '.join(SUPPORTED_BACKENDS.keys())}"
+            )
+        self.backend_name = backend_key
+        self._backend = SUPPORTED_BACKENDS[backend_key]
         
         # Auto-detect device
         if device is None:
@@ -79,40 +214,14 @@ class LocalVLMClassifier:
         if self._initialized:
             return
             
-        print(f"Loading vision-language model: {self.model_name}")
+        print(f"Loading vision-language model ({self.backend_name}): {self.model_name}")
         
         try:
-            from transformers import AutoProcessor, LlavaForConditionalGeneration
-            import torch
-            
-            # Load processor
-            print("Loading processor...")
-            self._processor = AutoProcessor.from_pretrained(self.model_name)
-            
-            # Load model with optional quantization
-            print("Loading model...")
-            if self.use_4bit and self.device == "cuda":
-                from transformers import BitsAndBytesConfig
-                
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_use_double_quant=True,
-                    bnb_4bit_quant_type="nf4"
-                )
-                
-                self._model = LlavaForConditionalGeneration.from_pretrained(
-                    self.model_name,
-                    quantization_config=quantization_config,
-                    device_map="auto",
-                    torch_dtype=torch.float16,
-                )
-            else:
-                self._model = LlavaForConditionalGeneration.from_pretrained(
-                    self.model_name,
-                    torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
-                )
-                self._model.to(self.device)
+            self._processor, self._model = self._backend.load(
+                self.model_name,
+                self.device,
+                self.use_4bit,
+            )
             
             self._model.eval()
             self._initialized = True
@@ -173,26 +282,20 @@ class LocalVLMClassifier:
             print(f"Running local VLM inference...")
             
             # Prepare inputs
-            inputs = self._processor(
-                text=prompt,
-                images=image,
-                return_tensors="pt"
-            ).to(self.device)
+            inputs = self._backend.build_inputs(
+                self._processor,
+                image,
+                prompt,
+                self.device,
+            )
             
             # Generate response
-            with torch.no_grad():
-                output_ids = self._model.generate(
-                    **inputs,
-                    max_new_tokens=50,
-                    do_sample=False,
-                    temperature=0.0,
-                )
+            output_ids = self._backend.generate(self._model, inputs)
             
             # Decode response
-            generated_text = self._processor.batch_decode(
+            generated_text = self._backend.decode(
+                self._processor,
                 output_ids,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False
             )[0]
             
             # Extract the answer (remove the prompt)

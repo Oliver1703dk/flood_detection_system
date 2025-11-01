@@ -44,14 +44,16 @@ def create_llm_classifier(
         # FIXED: Import from correct location
         from jetson_worker.llm.local_llm_classifier import LocalVLMClassifier
         
-        model_name = model or getattr(config, "LOCAL_LLM_MODEL", "Efficient-Large-Model/VILA1.5-3b")
+        model_name = model or getattr(config, "LOCAL_LLM_MODEL", "moondream")
         device = kwargs.pop("device", getattr(config, "LOCAL_LLM_DEVICE", None))
         use_4bit = kwargs.pop("use_4bit", getattr(config, "LOCAL_LLM_USE_4BIT", True))
+        backend = kwargs.pop("backend", getattr(config, "LOCAL_LLM_BACKEND", "moondream"))
         
         return LocalVLMClassifier(
             model_name=model_name,
             device=device,
             use_4bit=use_4bit,
+            backend=backend,
             **kwargs
         )
     else:

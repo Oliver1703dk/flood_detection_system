@@ -119,11 +119,14 @@ USE_LOCAL_LLM = True  # Set to True to use local VLM instead of OpenAI API
 
 # Model options:
 
-# - "Efficient-Large-Model/VILA1.5-3b" (recommended for Jetson, ~3GB VRAM)
-LOCAL_LLM_MODEL = str(PROJECT_ROOT / "jetson_worker" / "llm" / "models" / "VILA1.5-3b")
+# Default local VLM backend. Currently supported: "moondream".
+LOCAL_LLM_BACKEND = "moondream"
+
+# Path or model identifier for the selected backend.
+LOCAL_LLM_MODEL = str(PROJECT_ROOT / "jetson_worker" / "llm" / "models" / "moondream2")
 
 # Use 4-bit quantization to reduce memory usage (highly recommended for Jetson)
-LOCAL_LLM_USE_4BIT = True
+LOCAL_LLM_USE_4BIT = False
 
 # Device for local LLM ('cuda', 'cpu', or None for auto-detect)
 LOCAL_LLM_DEVICE = 'cuda'  
