@@ -29,6 +29,7 @@ from yolov8_processor.classifier.yolov8_final_classifier import YOLOv8FinalClass
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.postprocessing.result_formatter import ResultFormatter
 from yolov8_processor.preprocessing.image_processor import ImageProcessor
+from jetson_worker.power_monitor import get_power_monitor
 
 BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "localhost")
 BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "1883"))
@@ -103,6 +104,11 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Failed to decode image for YOLO inference")
 
     inference_start = time.perf_counter()
+    # Start power monitoring for YOLO inference
+    power_monitor = get_power_monitor()
+    job_id = f"yolo_{tier_value}_{int(time.time() * 1000)}"
+    power_monitor.start_sampling(job_id)
+    
     with _YOLO_LOCK:
         models = _YOLO_MODELS.get(tier_value)
         if not models:
@@ -137,6 +143,16 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             metadata=metadata,
         )
     metrics["inference_s"] = time.perf_counter() - inference_start
+    
+    # Stop power monitoring and add metrics to timing
+    power_metrics = power_monitor.stop_sampling(job_id)
+    if power_metrics["energy_j"] is not None:
+        metrics["backend_energy_j"] = power_metrics["energy_j"]
+        metrics["backend_avg_power_w"] = power_metrics["avg_power_w"]
+        metrics["backend_peak_power_w"] = power_metrics["peak_power_w"]
+        metrics["backend_cpu_util_%"] = power_metrics["cpu_util_%"]
+        metrics["backend_gpu_util_%"] = power_metrics["gpu_util_%"]
+    
     format_start = time.perf_counter()
     formatted = _RESULT_FORMATTER.format_results(results)
     metrics["result_format_s"] = time.perf_counter() - format_start
@@ -179,6 +195,11 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     sensor_baseline = payload.get("sensor_baseline") or payload.get("metadata", {}).get("sensor_baseline")
     sensor_anomalies = payload.get("sensor_anomalies")
 
+    # Start power monitoring for LLM inference
+    power_monitor = get_power_monitor()
+    job_id = f"llm_{int(time.time() * 1000)}"
+    power_monitor.start_sampling(job_id)
+
     with _LLM_LOCK:
         global _LLM_CLASSIFIER
         if _LLM_CLASSIFIER is None:
@@ -195,6 +216,15 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             sensor_anomalies=sensor_anomalies,
         )
         metrics["llm_inference_s"] = time.perf_counter() - llm_start
+
+    # Stop power monitoring and add metrics to timing
+    power_metrics = power_monitor.stop_sampling(job_id)
+    if power_metrics["energy_j"] is not None:
+        metrics["llm_energy_j"] = power_metrics["energy_j"]
+        metrics["llm_avg_power_w"] = power_metrics["avg_power_w"]
+        metrics["llm_peak_power_w"] = power_metrics["peak_power_w"]
+        metrics["llm_cpu_util_%"] = power_metrics["cpu_util_%"]
+        metrics["llm_gpu_util_%"] = power_metrics["gpu_util_%"]
 
     return {"prediction": prediction}
 
@@ -355,6 +385,17 @@ class JetsonWorker:
             "received_ts": metrics.get("received_ts"),
             "process_start_ts": metrics.get("process_start_ts"),
             "process_end_ts": metrics.get("process_end_ts"),
+            # Power monitoring metrics
+            "backend_energy_j": metrics.get("backend_energy_j"),
+            "backend_avg_power_w": metrics.get("backend_avg_power_w"),
+            "backend_peak_power_w": metrics.get("backend_peak_power_w"),
+            "backend_cpu_util_%": metrics.get("backend_cpu_util_%"),
+            "backend_gpu_util_%": metrics.get("backend_gpu_util_%"),
+            "llm_energy_j": metrics.get("llm_energy_j"),
+            "llm_avg_power_w": metrics.get("llm_avg_power_w"),
+            "llm_peak_power_w": metrics.get("llm_peak_power_w"),
+            "llm_cpu_util_%": metrics.get("llm_cpu_util_%"),
+            "llm_gpu_util_%": metrics.get("llm_gpu_util_%"),
         }
         response["timing"] = {k: v for k, v in export_fields.items() if v is not None}
         for transient_key in ("received_perf", "enqueue_perf"):

@@ -146,9 +146,7 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
         return
 
     strategy = strategy_cls()
-    classification_start = time.perf_counter()
     final_result = strategy.classify(detection_results, message_json)
-    classification_time = time.perf_counter() - classification_start
 
     if isinstance(final_result, FrameDecision):
         printable_result = decision_to_dict(final_result)
@@ -170,11 +168,12 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
         timing_payload["preprocess_s"] = preprocess_time
     if format_time is not None:
         timing_payload["result_format_s"] = format_time
-    timing_payload["classification_s"] = classification_time
+    # Note: classification_s is provided by FSM timing for FSM mode
     if isinstance(final_result, FrameDecision):
         for key, value in final_result.timing.items():
             if isinstance(value, (int, float)):
-                timing_payload[f"fsm_{key}"] = value
+                # FSM timing fields already have "fsm_" prefix, so just use the key as-is
+                timing_payload[key] = value
         backend_info = final_result.backend_info or {}
         if isinstance(backend_info, dict):
             latency_val = backend_info.get("latency_s")
@@ -203,6 +202,37 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
             llm_received = llm_backend.get("received_at")
             if isinstance(llm_sent, (int, float)) and isinstance(llm_received, (int, float)):
                 timing_payload["llm_roundtrip_s"] = llm_received - llm_sent
+    
+    # Aggregate energy metrics and compute total
+    total_energy_j = 0.0
+    if isinstance(final_result, FrameDecision):
+        # FSM energy
+        fsm_energy = timing_payload.get("fsm_energy_j")
+        if isinstance(fsm_energy, (int, float)):
+            total_energy_j += float(fsm_energy)
+        
+        # YOLO energy (from local Pi inference)
+        yolo_energy = timing_payload.get("yolo_energy_j")
+        if isinstance(yolo_energy, (int, float)):
+            total_energy_j += float(yolo_energy)
+        
+        # Backend (Jetson) energy - only if backend was remote
+        backend = final_result.backend if hasattr(final_result, 'backend') else backend_info.get("backend", "local")
+        if backend == "remote":
+            backend_energy = timing_payload.get("backend_energy_j")
+            if isinstance(backend_energy, (int, float)):
+                total_energy_j += float(backend_energy)
+        
+        # LLM backend (Jetson) energy - only if LLM was used and it was remote
+        if final_result.llm_used:
+            llm_backend_energy = timing_payload.get("llm_backend_energy_j")
+            if isinstance(llm_backend_energy, (int, float)):
+                total_energy_j += float(llm_backend_energy)
+        
+        # Store total energy
+        if total_energy_j > 0:
+            timing_payload["total_energy_j"] = total_energy_j
+    
     print(f"Pipeline latency: {pipeline_latency:.3f}s (queue wait {queue_wait_s:.3f}s)")
     saved_path = saver.save(result_payload, printable_result)
 

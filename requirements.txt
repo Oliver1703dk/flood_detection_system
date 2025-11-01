@@ -81,3 +81,6 @@ accelerate>=0.25.0
 bitsandbytes>=0.41.0  # For 4-bit quantization
 sentencepiece>=0.1.99
 protobuf>=3.20.0
+# For energy monitoring
+codecarbon>=2.3.0
+jetson-stats>=4.2.0

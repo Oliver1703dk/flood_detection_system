@@ -1,14 +1,24 @@
 import os
+import sys
+from pathlib import Path
 import cv2
 from datetime import datetime
 import config
+
+# Add project root to path for imports
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from yolov8_processor.inference.yolov8_inference import YOLOv8Inference
 from yolov8_processor.classifier.yolov8_final_classifier import YOLOv8FinalClassifier
+from flood_classifier.utils.energy_tracker import get_energy_tracker
 
 class MultiModelInference:
     def __init__(self, model_info=None):
         """Manage multiple YOLOv8 models and allow dynamic switching."""
         self.models = {}
+        self.last_energy_metrics = {}  # Store energy metrics from last inference
         # if model_info is not None:
         #     self.load_models(model_info)
         # else:
@@ -89,16 +99,26 @@ class MultiModelInference:
         print(image_name)
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_dict = {}
-        for model_id, inference_model in self.models.items():
-            print(f"Running inference for model {model_id} on image {image_name}...")
-            results = inference_model.run_inference(
-                image,
-                image_name=image_name,
-                run_id=run_id,
-                metadata=metadata,
-            )
-            print(f"Model {model_id} detected {len(results)} objects.")
-            results_dict[model_id] = results
+        
+        # Track energy for YOLO inference
+        energy_tracker = get_energy_tracker()
+        energy_metrics = {}
+        
+        with energy_tracker.measure("yolo_inference") as metrics:
+            for model_id, inference_model in self.models.items():
+                print(f"Running inference for model {model_id} on image {image_name}...")
+                results = inference_model.run_inference(
+                    image,
+                    image_name=image_name,
+                    run_id=run_id,
+                    metadata=metadata,
+                )
+                print(f"Model {model_id} detected {len(results)} objects.")
+                results_dict[model_id] = results
+            energy_metrics.update(metrics)
+        
+        # Store energy metrics for later retrieval by FSM
+        self.last_energy_metrics = energy_metrics.copy()
         
         # Aggregate/fuse predictions from all models.
         final_classifier = YOLOv8FinalClassifier()

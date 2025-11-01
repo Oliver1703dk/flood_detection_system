@@ -15,6 +15,11 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, TYPE_CHECK
 
 import config
 
+try:  # Import energy tracker
+    from flood_classifier.utils.energy_tracker import get_energy_tracker
+except Exception:  # pragma: no cover - optional dependency path
+    get_energy_tracker = None  # type: ignore
+
 try:  # Lazy import so unit tests can supply fakes without heavy dependencies.
     from yolov8_processor.preprocessing.image_processor import ImageProcessor
 except Exception:  # pragma: no cover - optional dependency path
@@ -47,6 +52,11 @@ try:  # pragma: no cover - optional dependency path
 except Exception:  # pragma: no cover - dispatcher relies on optional deps
     InferenceDispatcher = None  # type: ignore
     MQTTJetsonBackend = None  # type: ignore
+
+try:  # pragma: no cover - optional dependency path
+    from flood_classifier.utils.energy_tracker import get_energy_tracker
+except Exception:  # pragma: no cover - unit tests can stub
+    get_energy_tracker = None  # type: ignore
 
 if TYPE_CHECKING:  # pragma: no cover
     from flood_classifier.inference.dispatcher import InferenceDispatcher
@@ -348,6 +358,7 @@ class ModelManager:
 
         inference_latency: Optional[float] = None
         inference_start_wall = datetime.utcnow()
+        yolo_energy = None
         if self._multi_inference is not None:
             inference_start = perf_counter()
             results = self._multi_inference.run_all_inference(
@@ -357,6 +368,9 @@ class ModelManager:
             )
             inference_latency = perf_counter() - inference_start
             active_tier = self._active_tier or requested_tier
+            # Extract YOLO energy metrics for local runs only
+            if backend_meta["backend"] == "local":
+                yolo_energy = self._multi_inference.last_energy_metrics
         else:
             inference_start = perf_counter()
             if hasattr(self._active_model, "run_inference"):
@@ -379,6 +393,15 @@ class ModelManager:
             metadata["completed_at"] = datetime.utcnow().isoformat()
             timing_block = metadata.setdefault("timing", {})
             timing_block.setdefault("inference_s", inference_latency)
+            # Add YOLO energy to metadata only for local runs
+            if yolo_energy and backend_meta["backend"] == "local":
+                if isinstance(yolo_energy.get("energy_j"), (int, float)):
+                    metadata["energy"] = {"energy_j": float(yolo_energy["energy_j"])}
+                    timing_block["yolo_energy_j"] = float(yolo_energy["energy_j"])
+                if isinstance(yolo_energy.get("power_w"), (int, float)):
+                    timing_block["yolo_power_w"] = float(yolo_energy["power_w"])
+                if isinstance(yolo_energy.get("cpu_util_%"), (int, float)):
+                    timing_block["yolo_cpu_util_%"] = float(yolo_energy["cpu_util_%"])
         return detections, active_tier, switched, backend_meta
 
 
@@ -497,28 +520,60 @@ class FloodFSM:
                     if isinstance(value, (int, float)):
                         timing_info[f"backend_{key}"] = float(value)
 
-        classification_phase_start = perf_counter()
-        scores = self.classifier.classify_flood(
-            sensor_data=ctx.sensor_data,
-            detection_data=detections,
-            image_size=self.params.image_size,
-            timestamp=timestamp,
-        )
-        combined = scores.get("combined_score", 0.0)
-        image_score = scores.get("image_score", 0.0)
-        sensor_boost = scores.get("sensor_boost", 0.0)
-        prediction = scores.get("final_prediction", 0)
+        # Track energy for FSM logic (classification, counters, decision logic)
+        fsm_energy_metrics = {}
+        if get_energy_tracker is not None:
+            energy_tracker = get_energy_tracker()
+            with energy_tracker.measure("fsm_classification") as metrics:
+                classification_phase_start = perf_counter()
+                scores = self.classifier.classify_flood(
+                    sensor_data=ctx.sensor_data,
+                    detection_data=detections,
+                    image_size=self.params.image_size,
+                    timestamp=timestamp,
+                )
+                combined = scores.get("combined_score", 0.0)
+                image_score = scores.get("image_score", 0.0)
+                sensor_boost = scores.get("sensor_boost", 0.0)
+                prediction = scores.get("final_prediction", 0)
 
-        conflict = self._detect_conflict(combined, image_score, sensor_boost)
-        drift = self._detect_drift(ctx.sensor_data)
+                conflict = self._detect_conflict(combined, image_score, sensor_boost)
+                drift = self._detect_drift(ctx.sensor_data)
 
-        mid_band = self.params.threshold_low <= combined < self.params.threshold_high
-        ambiguous = mid_band or conflict
-        self._update_counters(combined, ambiguous, conflict, mid_band)
-        self._score_history.append(combined)
-        flapping = self._is_flapping()
+                mid_band = self.params.threshold_low <= combined < self.params.threshold_high
+                ambiguous = mid_band or conflict
+                self._update_counters(combined, ambiguous, conflict, mid_band)
+                self._score_history.append(combined)
+                flapping = self._is_flapping()
 
-        ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
+                ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
+                classification_duration = perf_counter() - classification_phase_start
+            fsm_energy_metrics.update(metrics)
+        else:
+            # Fallback when energy tracker not available
+            classification_phase_start = perf_counter()
+            scores = self.classifier.classify_flood(
+                sensor_data=ctx.sensor_data,
+                detection_data=detections,
+                image_size=self.params.image_size,
+                timestamp=timestamp,
+            )
+            combined = scores.get("combined_score", 0.0)
+            image_score = scores.get("image_score", 0.0)
+            sensor_boost = scores.get("sensor_boost", 0.0)
+            prediction = scores.get("final_prediction", 0)
+
+            conflict = self._detect_conflict(combined, image_score, sensor_boost)
+            drift = self._detect_drift(ctx.sensor_data)
+
+            mid_band = self.params.threshold_low <= combined < self.params.threshold_high
+            ambiguous = mid_band or conflict
+            self._update_counters(combined, ambiguous, conflict, mid_band)
+            self._score_history.append(combined)
+            flapping = self._is_flapping()
+
+            ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
+            classification_duration = perf_counter() - classification_phase_start
 
         llm_used = False
         llm_prediction: Optional[int] = None
@@ -592,7 +647,6 @@ class FloodFSM:
             self._resource_anchor_state = None
             self._resource_skip_cursor = 0
 
-        classification_duration = perf_counter() - classification_phase_start
         timing_info["classification_s"] = classification_duration
         llm_duration_val = llm_backend_info.get("duration_s") if isinstance(llm_backend_info, dict) else None
         if isinstance(llm_duration_val, (int, float)):
@@ -603,6 +657,15 @@ class FloodFSM:
                 for key, value in llm_backend_timing.items():
                     if isinstance(value, (int, float)):
                         timing_info[f"llm_backend_{key}"] = float(value)
+        
+        # Add FSM energy metrics to timing info
+        if fsm_energy_metrics:
+            if isinstance(fsm_energy_metrics.get("energy_j"), (int, float)):
+                timing_info["fsm_energy_j"] = float(fsm_energy_metrics["energy_j"])
+            if isinstance(fsm_energy_metrics.get("power_w"), (int, float)):
+                timing_info["fsm_power_w"] = float(fsm_energy_metrics["power_w"])
+            if isinstance(fsm_energy_metrics.get("cpu_util_%"), (int, float)):
+                timing_info["fsm_cpu_util_%"] = float(fsm_energy_metrics["cpu_util_%"])
 
         decision = self._finalize_decision(
             base_decision=None,
