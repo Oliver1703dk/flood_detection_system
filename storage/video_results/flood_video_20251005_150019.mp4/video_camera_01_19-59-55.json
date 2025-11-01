@@ -1,0 +1,109 @@
+{
+    "sensor_data": {
+        "temperature": 12.0,
+        "humidity": 88.0,
+        "pressure": 995.0
+    },
+    "metadata": {
+        "timestamp": "2025-10-20T00:38:07.645530",
+        "location": "50.8503,4.3517",
+        "camera_id": "video_camera_01",
+        "motion": "slow",
+        "resource_constrained": false,
+        "video_timestamp_sec": 4.0,
+        "video_file": "flood_video_20251005_150019.mp4",
+        "sensor_baseline": {
+            "temperature_baseline": 17.0,
+            "humidity_baseline": 78.0,
+            "pressure_baseline": 1016.0
+        },
+        "sensor_data": {
+            "temperature": 12.0,
+            "humidity": 88.0,
+            "pressure": 995.0
+        },
+        "sensor_anomalies": {
+            "delta_temperature": -5.0,
+            "delta_humidity": 10.0,
+            "delta_pressure": -21.0
+        }
+    },
+    "classification_result": {
+        "frame_index": 1,
+        "state": "S0",
+        "model_tier": "nano",
+        "prediction": 0,
+        "scores": {
+            "combined_score": 0.11,
+            "image_score": 0,
+            "sensor_boost": 0.11
+        },
+        "counters": {
+            "high": 0,
+            "low": 2,
+            "ambiguous": 0,
+            "conflict": 0,
+            "mid": 0
+        },
+        "llm_used": false,
+        "llm_prediction": null,
+        "conflict": false,
+        "drift": false,
+        "flapping": false,
+        "skipped": false,
+        "model_switched": false,
+        "tier_requested": "nano",
+        "backend": "remote",
+        "backend_info": {
+            "latency_s": 0.2239980697631836,
+            "request_id": "0dcc9bf5457d470f893be7550d79fb30",
+            "sent_at": 1762027195.5512137,
+            "received_at": 1762027195.7752118,
+            "timing": {
+                "queue_wait_s": 0.0005722209989471594,
+                "preprocess_s": 0.028087582999432925,
+                "inference_s": 0.17659601400009706,
+                "result_format_s": 5.694999344996177e-06,
+                "compute_s": 0.2048431069997605,
+                "total_runtime_s": 0.20541532799870765,
+                "received_ts": 1762027195.598363,
+                "process_start_ts": 1762027195.5991368,
+                "process_end_ts": 1762027195.8039844
+            }
+        },
+        "llm_backend_info": {},
+        "s2_llm_confirmed": false,
+        "timing": {
+            "inference_s": 0.2239980697631836,
+            "backend_queue_wait_s": 0.0005722209989471594,
+            "backend_preprocess_s": 0.028087582999432925,
+            "backend_inference_s": 0.17659601400009706,
+            "backend_result_format_s": 5.694999344996177e-06,
+            "backend_compute_s": 0.2048431069997605,
+            "backend_total_runtime_s": 0.20541532799870765,
+            "backend_received_ts": 1762027195.598363,
+            "backend_process_start_ts": 1762027195.5991368,
+            "backend_process_end_ts": 1762027195.8039844,
+            "classification_s": 0.0022655739994661417
+        }
+    },
+    "timing": {
+        "process_start_ts": 1762027195.2783217,
+        "pipeline_latency_s": 0.49994069800050056,
+        "queue_wait_s": 0.044545794000441674,
+        "inference_s": 0.2239980697631836,
+        "backend_queue_wait_s": 0.0005722209989471594,
+        "backend_preprocess_s": 0.028087582999432925,
+        "backend_inference_s": 0.17659601400009706,
+        "backend_result_format_s": 5.694999344996177e-06,
+        "backend_compute_s": 0.2048431069997605,
+        "backend_total_runtime_s": 0.20541532799870765,
+        "backend_received_ts": 1762027195.598363,
+        "backend_process_start_ts": 1762027195.5991368,
+        "backend_process_end_ts": 1762027195.8039844,
+        "classification_s": 0.0022655739994661417,
+        "backend_latency_s": 0.2239980697631836,
+        "backend_roundtrip_s": 0.2239980697631836,
+        "baseline_update_s": 0.0006181110002216883
+    }
+}
