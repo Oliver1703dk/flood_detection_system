@@ -206,7 +206,7 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             _log("Initializing LLM image classifier")
             # Use factory to create the appropriate classifier
             _LLM_CLASSIFIER = create_llm_classifier(
-                raise_exceptions=False,
+                raise_exceptions=True,
             )
         llm_start = time.perf_counter()
         prediction = _LLM_CLASSIFIER.classify_flood(
@@ -259,7 +259,7 @@ class JetsonWorker:
         if self.preload_llm:
             _log("Pre-loading LLM model (this may take 15-20 seconds)...")
             self._preload_llm()
-            _log("✓ LLM model pre-loaded and ready for inference requests!")
+            _log("✓ LLM model p½re-loaded and ready for inference requests!")
         
         while not self._stop.is_set():
             time.sleep(0.1)
@@ -270,7 +270,7 @@ class JetsonWorker:
         with _LLM_LOCK:
             if _LLM_CLASSIFIER is None:
                 _LLM_CLASSIFIER = create_llm_classifier(
-                    raise_exceptions=False,
+                    raise_exceptions=True,
                 )
                 # Trigger model initialization
                 _LLM_CLASSIFIER._initialize_model()

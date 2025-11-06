@@ -77,10 +77,12 @@ class _MoondreamBackend(_BaseBackend):
         processor = AutoProcessor.from_pretrained(
             model_name,
             trust_remote_code=True,
+            local_files_only=True,  # NEW: Enforce local-only; raise if missing files
         )
 
         load_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
+            "local_files_only": True,  # NEW: Enforce local-only for model too
         }
 
         if use_4bit and device == "cuda":
@@ -183,7 +185,15 @@ class LocalVLMClassifier:
         else:
             resolved_model = None
 
-        self.model_name = str(resolved_model) if resolved_model else model_name
+        # Enforce local-only loading; raise error if no local path found
+        if resolved_model is None:
+            raise ValueError(
+                f"Local model '{model_name}' not found. "
+                f"Provide a local path to the model directory, or place it in '{module_dir / 'models'}'. "
+                f"Remote loading from internet (e.g., Hugging Face repo IDs) is disabled."
+            )
+
+        self.model_name = str(resolved_model)
         self.default_label = default_label
         self.raise_exceptions = raise_exceptions
         self.use_4bit = use_4bit
