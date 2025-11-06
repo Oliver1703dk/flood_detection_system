@@ -78,10 +78,13 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
     # -------------------------------------------
     # Validate and Store Data
     # -------------------------------------------
+    validation_start = time.perf_counter()
     validator = DataValidator()
     storage_manager = StorageManager()
+    validation_duration = None
     if validator.validate(message_json):
         storage_manager.store(message_json)
+        validation_duration = time.perf_counter() - validation_start
         print("Data validated and stored successfully.")
     else:
         print("Data validation failed. Ignoring message.")
@@ -156,6 +159,7 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
         printable_result = final_result
 
     # Save results.
+    save_start = time.perf_counter()
     saver = DataResultsSaver()
     result_payload = dict(message_json)
     result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
@@ -164,6 +168,8 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
     timing_payload["process_start_ts"] = process_start_ts
     timing_payload["pipeline_latency_s"] = pipeline_latency
     timing_payload["queue_wait_s"] = queue_wait_s
+    if validation_duration is not None:
+        timing_payload["validation_storage_s"] = validation_duration
     if preprocess_time is not None:
         timing_payload["preprocess_s"] = preprocess_time
     if format_time is not None:
@@ -242,6 +248,8 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
     
     print(f"Pipeline latency: {pipeline_latency:.3f}s (queue wait {queue_wait_s:.3f}s)")
     saved_path = saver.save(result_payload, printable_result)
+    save_duration = time.perf_counter() - save_start
+    timing_payload["result_save_s"] = save_duration
 
     # -------------------------------------------
     # Update the Baselines Using Latest Data
@@ -256,21 +264,30 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
     current_baselines = baseline_calculator.update_baselines()
     baseline_duration = time.perf_counter() - baseline_start
     timing_payload["baseline_update_s"] = baseline_duration
+    
+    # Calculate total pipeline latency including everything
+    total_pipeline_latency = time.perf_counter() - start_time
+    timing_payload["total_pipeline_latency_s"] = total_pipeline_latency
+    
     if current_baselines:
         print("✅ Updated Baselines:", current_baselines)
     else:
         print("❌ Baseline update failed (no stable period found).")
-    timing_payload["baseline_update_s"] = baseline_duration
     if saved_path:
         try:
             with open(saved_path, "r+", encoding="utf-8") as f:
                 saved_data = json.load(f)
-                saved_data.setdefault("timing", {})["baseline_update_s"] = baseline_duration
+                saved_timing = saved_data.setdefault("timing", {})
+                saved_timing["baseline_update_s"] = baseline_duration
+                if validation_duration is not None:
+                    saved_timing["validation_storage_s"] = validation_duration
+                saved_timing["result_save_s"] = save_duration
+                saved_timing["total_pipeline_latency_s"] = total_pipeline_latency
                 f.seek(0)
                 json.dump(saved_data, f, indent=4)
                 f.truncate()
         except Exception as exc:
-            print(f"Warning: failed to update baseline timing in {saved_path}: {exc}")
+            print(f"Warning: failed to update timing in {saved_path}: {exc}")
     print("\n--- Final Flood Classification ---")
     print(printable_result)
 

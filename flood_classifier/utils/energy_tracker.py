@@ -45,8 +45,10 @@ class EnergyTracker:
         """
         self.offline = offline
         self._tracker: Optional[Any] = None
+        self._tracker_instance: Optional[Any] = None  # Reusable tracker instance
         self._lock = threading.Lock()
         self._active = False
+        self._initialized = False
         
     def start_measurement(self, operation_name: str = "operation") -> None:
         """Start energy tracking for an operation.
@@ -63,23 +65,29 @@ class EnergyTracker:
                 self._stop_tracker()
             
             try:
-                # Configure codecarbon for Raspberry Pi
-                kwargs = {
-                    "save_to_file": False,  # Don't save CSV files
-                    "log_level": "error",   # Suppress verbose logging
-                    "measure_power_secs": 0.1,  # Sample every 100ms
-                    "tracking_mode": "process",  # Per-process for Pi accuracy
-                }
+                # Reuse tracker instance instead of creating new one each time
+                if not self._initialized or self._tracker_instance is None:
+                    # Configure codecarbon for Raspberry Pi
+                    kwargs = {
+                        "save_to_file": False,  # Don't save CSV files
+                        "log_level": "error",   # Suppress verbose logging
+                        "measure_power_secs": 0.1,  # Sample every 100ms
+                        "tracking_mode": "process",  # Per-process for Pi accuracy
+                    }
+                    
+                    if self.offline:
+                        # Use OfflineEmissionsTracker for no-internet carbon intensity
+                        kwargs["country_iso_code"] = os.getenv("CODECARBON_COUNTRY_ISO", "USA")  # Adjust default
+                        self._tracker_instance = OfflineEmissionsTracker(**kwargs)
+                    else:
+                        # Online mode (no upload)
+                        kwargs["save_to_api"] = False
+                        self._tracker_instance = EmissionsTracker(**kwargs)
+                    
+                    self._initialized = True
                 
-                if self.offline:
-                    # Use OfflineEmissionsTracker for no-internet carbon intensity
-                    kwargs["country_iso_code"] = os.getenv("CODECARBON_COUNTRY_ISO", "USA")  # Adjust default
-                    self._tracker = OfflineEmissionsTracker(**kwargs)
-                else:
-                    # Online mode (no upload)
-                    kwargs["save_to_api"] = False
-                    self._tracker = EmissionsTracker(**kwargs)
-                
+                # Reuse the existing tracker instance
+                self._tracker = self._tracker_instance
                 self._tracker.start()
                 self._active = True
             except Exception as e:
@@ -87,6 +95,7 @@ class EnergyTracker:
                 print(f"Warning: Energy tracking failed to start: {e}")
                 self._tracker = None
                 self._active = False
+                self._initialized = False
     
     def stop_measurement(self) -> Dict[str, Optional[float]]:
         """Stop energy tracking and return metrics.
@@ -152,13 +161,18 @@ class EnergyTracker:
         try:
             self._tracker.stop()
             emissions_data = self._tracker.final_emissions_data
-            self._tracker = None
+            # Don't set _tracker to None - keep the instance for reuse
+            # Only clear the active flag
             self._active = False
             return emissions_data
         except Exception as e:
             print(f"Warning: Failed to stop tracker cleanly: {e}")
             self._tracker = None
             self._active = False
+            # Reset initialization if tracker is broken
+            if self._tracker_instance == self._tracker:
+                self._initialized = False
+                self._tracker_instance = None
             return None
     
     def get_cpu_utilization(self) -> float:
@@ -168,7 +182,7 @@ class EnergyTracker:
             CPU utilization as a percentage (0-100).
         """
         try:
-            return psutil.cpu_percent(interval=0.1)
+            return psutil.cpu_percent(interval=None)
         except Exception:
             return 0.0
     
