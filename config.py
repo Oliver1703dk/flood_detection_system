@@ -26,7 +26,7 @@ IMAGE_NAME = "flood-test-ub3"
 # Default model size and number used on startup. These will be overridden
 # when IMPORTANCE values are used to dynamically select models.
 # Supported sizes: nano, small, medium, large, xlarge
-model_size = "small"
+model_size = "nano"
 model_number = 3
 
 # Importance weights used for dynamic model selection. They must sum to 1.
@@ -114,7 +114,7 @@ INFERENCE_ROUTING = {
 
 # Default YOLO tier to keep on the Pi. Tiers above this automatically target
 # the Jetson regardless of FSM state. The string must match ModelTier values.
-LOCAL_YOLO_TIER = "small"
+LOCAL_YOLO_TIER = "nano"
 
 
 
