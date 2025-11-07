@@ -397,25 +397,6 @@ class JetsonWorker:
             total_runtime += metrics["queue_wait_s"]
         metrics["total_runtime_s"] = total_runtime
 
-        response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
-
-        # Serialize response and publish while capturing timings
-        json_start = time.perf_counter()
-        response_payload = json.dumps(response).encode("utf-8")
-        metrics["mqtt_response_json_serialize_s"] = time.perf_counter() - json_start
-
-        publish_start = time.perf_counter()
-        publish_result = self.client.publish(response_topic, response_payload, qos=QOS)
-        metrics["mqtt_response_publish_s"] = time.perf_counter() - publish_start
-
-        wait_publish_start = time.perf_counter()
-        try:
-            publish_result.wait_for_publish()
-        except Exception:
-            pass
-        metrics["mqtt_response_wait_publish_s"] = time.perf_counter() - wait_publish_start
-        metrics["mqtt_response_ts"] = time.time()
-
         export_fields = {
             "queue_wait_s": metrics.get("queue_wait_s"),
             "preprocess_s": metrics.get("preprocess_s"),
@@ -453,6 +434,26 @@ class JetsonWorker:
 
         for transient_key in ("mqtt_receive_perf",):
             metrics.pop(transient_key, None)
+
+        response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
+
+        # Serialize response and publish while capturing timings
+        json_start = time.perf_counter()
+        response_payload = json.dumps(response).encode("utf-8")
+        metrics["mqtt_response_json_serialize_s"] = time.perf_counter() - json_start
+
+        publish_start = time.perf_counter()
+        publish_result = self.client.publish(response_topic, response_payload, qos=QOS)
+        metrics["mqtt_response_publish_s"] = time.perf_counter() - publish_start
+
+        wait_publish_start = time.perf_counter()
+        try:
+            publish_result.wait_for_publish()
+        except Exception:
+            pass
+        metrics["mqtt_response_wait_publish_s"] = time.perf_counter() - wait_publish_start
+        metrics["mqtt_response_ts"] = time.time()
+
         _log(f"Published response for job id {job_id} to '{response_topic}'")
 
     def _publish_superseded(self, payload: Dict[str, Any]) -> None:

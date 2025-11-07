@@ -466,7 +466,10 @@ class FloodFSM:
 
         timestamp = ctx.resolved_timestamp()
         baseline_calc = getattr(self.classifier, "baseline_calculator", None)
+        baseline_lookup_start = perf_counter()
         baseline = baseline_calc.get_baseline_for_time(timestamp) if baseline_calc else None
+        if baseline_calc is not None:
+            fsm_timing["fsm_baseline_lookup_s"] = perf_counter() - baseline_lookup_start
         if baseline is not None:
             ctx.metadata["sensor_baseline"] = baseline
         ctx.metadata.setdefault("sensor_data", ctx.sensor_data)
@@ -508,13 +511,20 @@ class FloodFSM:
                 return new_decision
             self._resource_skip_cursor = 1  # current frame processed; start skip cycle next frame
 
+        tier_select_start = perf_counter()
         requested_tier = self._choose_tier(motion, resource_flag=resource_flag)
+        fsm_timing["fsm_tier_selection_s"] = perf_counter() - tier_select_start
+
+        infer_dispatch_start = perf_counter()
         detections, model_tier, switched, backend_meta = self.model_manager.infer(
             ctx,
             requested_tier,
             self._frame_index,
             prev_state,
         )
+        fsm_timing["fsm_infer_dispatch_s"] = perf_counter() - infer_dispatch_start
+        if switched:
+            fsm_timing["fsm_model_switched_flag"] = 1.0
         backend_name = backend_meta.get("backend", "local")
         backend_info = backend_meta.get("metadata", {})
         timing_info: Dict[str, float] = {}
@@ -530,8 +540,12 @@ class FloodFSM:
 
         # Track energy for FSM logic (classification, counters, decision logic)
         fsm_energy_metrics = {}
-        if get_energy_tracker is not None:
+        classification_duration = 0.0
+        classification_measure_duration = 0.0
+        energy_tracking_enabled = bool(getattr(config, "ENABLE_FSM_ENERGY_TRACKING", True))
+        if get_energy_tracker is not None and energy_tracking_enabled:
             energy_tracker = get_energy_tracker()
+            energy_measure_start = perf_counter()
             with energy_tracker.measure("fsm_classification") as metrics:
                 classification_phase_start = perf_counter()
                 scores = self.classifier.classify_flood(
@@ -557,6 +571,7 @@ class FloodFSM:
                 ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
                 classification_duration = perf_counter() - classification_phase_start
             fsm_energy_metrics.update(metrics)
+            classification_measure_duration = perf_counter() - energy_measure_start
         else:
             # Fallback when energy tracker not available
             classification_phase_start = perf_counter()
@@ -582,6 +597,11 @@ class FloodFSM:
 
             ctx.metadata["sensor_anomalies"] = scores.get("anomalies")
             classification_duration = perf_counter() - classification_phase_start
+            classification_measure_duration = classification_duration
+
+        fsm_timing["fsm_classification_core_s"] = classification_duration
+        if energy_tracking_enabled and get_energy_tracker is not None:
+            fsm_timing["fsm_energy_measurement_overhead_s"] = max(0.0, classification_measure_duration - classification_duration)
 
         llm_used = False
         llm_prediction: Optional[int] = None
@@ -625,7 +645,9 @@ class FloodFSM:
                     }
                     if llm_call_duration is not None:
                         llm_backend_info["duration_s"] = llm_call_duration
+                        fsm_timing["fsm_llm_request_s"] = llm_call_duration
 
+        determine_start = perf_counter()
         next_state = self._determine_next_state(
             current_state=self.state,
             combined=combined,
@@ -633,6 +655,9 @@ class FloodFSM:
             conflict=conflict,
             flapping=flapping,
         )
+        fsm_timing["fsm_state_evaluation_s"] = perf_counter() - determine_start
+
+        enforce_start = perf_counter()
         (
             next_state,
             prediction,
@@ -650,6 +675,7 @@ class FloodFSM:
             llm_prediction=llm_prediction,
             llm_backend_info=llm_backend_info,
         )
+        fsm_timing["fsm_s2_enforce_s"] = perf_counter() - enforce_start
         self.state = next_state
         if self.state != FloodState.S5:
             self._resource_anchor_state = None
@@ -680,6 +706,7 @@ class FloodFSM:
             if isinstance(fsm_energy_metrics.get("cpu_util_%"), (int, float)):
                 timing_info["fsm_cpu_util_%"] = float(fsm_energy_metrics["cpu_util_%"])
 
+        finalize_start = perf_counter()
         decision = self._finalize_decision(
             base_decision=None,
             frame_index=self._frame_index,
@@ -706,6 +733,7 @@ class FloodFSM:
             s2_llm_confirmed=self._s2_llm_confirmed,
             timing=timing_info,
         )
+        fsm_timing["fsm_finalize_s"] = perf_counter() - finalize_start
         self._last_decision = decision
         return decision
 

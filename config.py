@@ -12,6 +12,10 @@ CLASSIFICATION_MODE =  "fsm"  # "fsm" or "llm_only"
 # additional LLM-based image detector.
 USE_LLM_CONFIRMATION = False
 
+# When True, the FSM will track energy usage via energy_tracker during
+# classification. Disable to skip energy measurement and reduce latency.
+ENABLE_FSM_ENERGY_TRACKING = False
+
 # Image size for inference (width, height)
 IMAGE_SIZE = (640, 640)
 # Have this either 'test' or anything else to use a dummy image
