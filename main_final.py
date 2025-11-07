@@ -34,18 +34,19 @@ class LatestPayloadBuffer:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._latest: Optional[Tuple[str, bytes, float]] = None
+        self._latest: Optional[Tuple[str, bytes, float, float]] = None
         self._available = threading.Event()
 
-    def offer(self, topic: str, payload: bytes) -> Optional[Tuple[str, bytes, float]]:
+    def offer(self, topic: str, payload: bytes) -> Optional[Tuple[str, bytes, float, float]]:
         with self._lock:
             superseded = self._latest
-            now = time.perf_counter()
-            self._latest = (topic, payload, now)
+            now_perf = time.perf_counter()
+            now_wall = time.time()
+            self._latest = (topic, payload, now_perf, now_wall)
             self._available.set()
             return superseded
 
-    def take(self, timeout: float = 0.5) -> Optional[Tuple[str, bytes, float]]:
+    def take(self, timeout: float = 0.5) -> Optional[Tuple[str, bytes, float, float]]:
         if not self._available.wait(timeout=timeout):
             return None
         with self._lock:
@@ -55,25 +56,72 @@ class LatestPayloadBuffer:
             return item
 
 
-def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0):
+def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0, queue_enter_ts: Optional[float] = None):
     """
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
     """
     process_start_ts = time.time()
     start_time = time.perf_counter()
+    timing_payload = {}
     try:
+        # Time JSON parsing
+        json_parse_start = time.perf_counter()
         # Decode payload (if it comes as bytes) and convert to JSON.
         if isinstance(message_payload, bytes):
             message_payload = message_payload.decode("utf-8")
         message_json = json.loads(message_payload)
+        json_parse_duration = time.perf_counter() - json_parse_start
+        timing_payload["json_parse_s"] = json_parse_duration
+        
         original_metadata = deepcopy(message_json.get("metadata", {}) or {})
+        metadata = message_json.setdefault("metadata", {})
         print("\n--- Received MQTT Message ---")
         # Optionally print the formatted JSON:
         # print(json.dumps(message_json, indent=4))
     except Exception as e:
         print("Failed to decode MQTT message:", e)
         return
+
+    if queue_enter_ts is not None:
+        timing_payload["processor_queue_enter_ts"] = queue_enter_ts
+        metadata["processor_queue_enter_ts"] = queue_enter_ts
+
+    metadata["processor_receive_ts"] = process_start_ts
+    if queue_enter_ts is not None:
+        metadata["processor_queue_exit_ts"] = queue_enter_ts + queue_wait_s
+
+    def _to_timestamp(value: Optional[object]) -> Optional[float]:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                try:
+                    return datetime.fromisoformat(value).timestamp()
+                except ValueError:
+                    return None
+        return None
+
+    collector_capture_ts_val = _to_timestamp(metadata.get("collector_capture_ts"))
+    collector_publish_ts_val = _to_timestamp(metadata.get("collector_publish_ts"))
+
+    if collector_capture_ts_val is not None:
+        timing_payload["collector_capture_ts"] = collector_capture_ts_val
+        metadata["collector_capture_ts"] = collector_capture_ts_val
+        timing_payload["collector_capture_to_processor_receive_s"] = process_start_ts - collector_capture_ts_val
+        if queue_enter_ts is not None:
+            timing_payload["collector_capture_to_queue_enter_s"] = queue_enter_ts - collector_capture_ts_val
+
+    if collector_publish_ts_val is not None:
+        timing_payload["collector_publish_ts"] = collector_publish_ts_val
+        metadata["collector_publish_ts"] = collector_publish_ts_val
+        timing_payload["collector_publish_to_processor_receive_s"] = process_start_ts - collector_publish_ts_val
+        if queue_enter_ts is not None:
+            timing_payload["collector_publish_to_queue_enter_s"] = queue_enter_ts - collector_publish_ts_val
 
     # -------------------------------------------
     # Validate and Store Data
@@ -164,10 +212,17 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0)
     result_payload = dict(message_json)
     result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
     pipeline_latency = time.perf_counter() - start_time
-    timing_payload = result_payload.setdefault("timing", {})
-    timing_payload["process_start_ts"] = process_start_ts
-    timing_payload["pipeline_latency_s"] = pipeline_latency
-    timing_payload["queue_wait_s"] = queue_wait_s
+    result_timing = result_payload.setdefault("timing", {})
+    # Merge timing_payload (which includes json_parse_s) into result_timing
+    result_timing.update(timing_payload)
+    result_timing["process_start_ts"] = process_start_ts
+    result_timing["pipeline_latency_s"] = pipeline_latency
+    result_timing["queue_wait_s"] = queue_wait_s
+    if queue_enter_ts is not None:
+        queue_exit_ts = queue_enter_ts + queue_wait_s
+        result_timing["processor_queue_enter_ts"] = queue_enter_ts
+        result_timing["processor_queue_exit_ts"] = queue_exit_ts
+    timing_payload = result_timing
     if validation_duration is not None:
         timing_payload["validation_storage_s"] = validation_duration
     if preprocess_time is not None:
@@ -323,8 +378,8 @@ def main():
             item = latest_messages.take()
             if item is None:
                 continue
-            topic, payload, offered_at = item
-            queue_wait_s = time.perf_counter() - offered_at if offered_at is not None else 0.0
+            topic, payload, offered_perf, offered_ts = item
+            queue_wait_s = time.perf_counter() - offered_perf if offered_perf is not None else 0.0
             try:
                 config.IMAGE_NAME = (
                     "MQTT_Image"
@@ -338,6 +393,7 @@ def main():
                     payload,
                     image_name=config.IMAGE_NAME,
                     queue_wait_s=queue_wait_s,
+                    queue_enter_ts=offered_ts,
                 )
             except Exception as exc:
                 print(f"Error processing buffered message: {exc}")

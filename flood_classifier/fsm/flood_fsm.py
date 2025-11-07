@@ -453,7 +453,13 @@ class FloodFSM:
         return InferenceDispatcher(remote_backend=remote_backend)
 
     def next_state(self, ctx: FrameContext) -> FrameDecision:
+        fsm_timing: Dict[str, float] = {}
+        fsm_start = perf_counter()
+        
         self._frame_index += 1
+        
+        # Time state transition logic
+        state_transition_start = perf_counter()
         motion = ctx.get_motion_state()
         resource_flag = ctx.resource_constrained or bool(ctx.metadata.get("resource_constrained"))
         prev_state = self.state
@@ -465,6 +471,8 @@ class FloodFSM:
             ctx.metadata["sensor_baseline"] = baseline
         ctx.metadata.setdefault("sensor_data", ctx.sensor_data)
         ctx.metadata.setdefault("timestamp", timestamp.isoformat())
+        state_transition_duration = perf_counter() - state_transition_start
+        fsm_timing["fsm_state_transition_s"] = state_transition_duration
 
         if resource_flag and self.state != FloodState.S5:
             self._resource_anchor_state = self.state
@@ -647,6 +655,11 @@ class FloodFSM:
             self._resource_anchor_state = None
             self._resource_skip_cursor = 0
 
+        # Add FSM timing metrics
+        fsm_total_duration = perf_counter() - fsm_start
+        fsm_timing["fsm_total_s"] = fsm_total_duration
+        timing_info.update(fsm_timing)
+        
         timing_info["classification_s"] = classification_duration
         llm_duration_val = llm_backend_info.get("duration_s") if isinstance(llm_backend_info, dict) else None
         if isinstance(llm_duration_val, (int, float)):

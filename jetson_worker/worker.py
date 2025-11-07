@@ -98,7 +98,8 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     metrics = payload.setdefault("_timing", {})
     preprocess_start = time.perf_counter()
-    image = _IMAGE_PROCESSOR.preprocess(image_b64)
+    # Pass timing_dict to image processor to collect detailed timing
+    image = _IMAGE_PROCESSOR.preprocess(image_b64, timing_dict=metrics)
     metrics["preprocess_s"] = time.perf_counter() - preprocess_start
     if image is None:
         raise ValueError("Failed to decode image for YOLO inference")
@@ -187,7 +188,9 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         metrics = payload.setdefault("_timing", {})
         decode_start = time.perf_counter()
         image_bytes = base64.b64decode(image_b64)
-        metrics["preprocess_s"] = metrics.get("preprocess_s", 0.0) + (time.perf_counter() - decode_start)
+        decode_duration = time.perf_counter() - decode_start
+        metrics["llm_image_decode_s"] = decode_duration
+        metrics["preprocess_s"] = metrics.get("preprocess_s", 0.0) + decode_duration
     except Exception as exc:
         raise ValueError("Invalid base64 image data for LLM inference") from exc
 
@@ -200,6 +203,10 @@ def run_llm_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     job_id = f"llm_{int(time.time() * 1000)}"
     power_monitor.start_sampling(job_id)
 
+    # Check if LLM confirmation is enabled before initializing
+    if not getattr(config, "USE_LLM_CONFIRMATION", False):
+        raise ValueError("LLM inference requested but USE_LLM_CONFIRMATION is disabled in config")
+    
     with _LLM_LOCK:
         global _LLM_CLASSIFIER
         if _LLM_CLASSIFIER is None:
@@ -241,7 +248,8 @@ class JetsonWorker:
         self._stop = threading.Event()
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_announced = False
-        self.preload_llm = preload_llm
+        # Only preload LLM if both preload_llm is True AND USE_LLM_CONFIRMATION is enabled
+        self.preload_llm = preload_llm and getattr(config, "USE_LLM_CONFIRMATION", False)
         self._job_lock = threading.Lock()
         self._job_event = threading.Event()
         self._latest_job: Optional[Dict[str, Any]] = None
@@ -291,6 +299,7 @@ class JetsonWorker:
             _log(f"MQTT connection failed with return code {rc}")
 
     def _on_message(self, client, _userdata, message):
+        deserialize_start = time.perf_counter()
         try:
             payload = json.loads(message.payload.decode("utf-8"))
         except json.JSONDecodeError:
@@ -302,8 +311,17 @@ class JetsonWorker:
 
         _log(f"Received task '{task}' (job id: {job_id}); queueing for worker thread")
         metrics = payload.setdefault("_timing", {})
-        metrics["received_ts"] = time.time()
-        metrics["received_perf"] = time.perf_counter()
+        metrics["mqtt_request_json_deserialize_s"] = time.perf_counter() - deserialize_start
+        receive_ts = time.time()
+        receive_perf = time.perf_counter()
+        metrics["mqtt_receive_ts"] = receive_ts
+        metrics["mqtt_receive_perf"] = receive_perf
+        sent_ts = payload.get("ts") or metrics.get("sent_ts")
+        if isinstance(sent_ts, (int, float)):
+            metrics["sent_ts"] = sent_ts
+            metrics["network_pi_to_jetson_s"] = max(0.0, receive_ts - sent_ts)
+        metrics["received_ts"] = receive_ts
+        metrics["received_perf"] = receive_perf
         superseded = self._enqueue_job(payload)
         if superseded is not None:
             self._publish_superseded(superseded)
@@ -352,6 +370,11 @@ class JetsonWorker:
 
         _log(f"Processing task '{task}' (job id: {job_id})")
         metrics = payload.setdefault("_timing", {})
+        
+        # Time JSON deserialization (payload was already deserialized, but we can time it if needed)
+        # Note: The payload is already deserialized by MQTT client, so we skip this here
+        # but we could add it if we had access to raw payload
+        
         metrics["process_start_ts"] = time.time()
         process_start_perf = time.perf_counter()
         response: Dict[str, Any] = {"id": job_id, "error": None}
@@ -374,6 +397,25 @@ class JetsonWorker:
             total_runtime += metrics["queue_wait_s"]
         metrics["total_runtime_s"] = total_runtime
 
+        response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
+
+        # Serialize response and publish while capturing timings
+        json_start = time.perf_counter()
+        response_payload = json.dumps(response).encode("utf-8")
+        metrics["mqtt_response_json_serialize_s"] = time.perf_counter() - json_start
+
+        publish_start = time.perf_counter()
+        publish_result = self.client.publish(response_topic, response_payload, qos=QOS)
+        metrics["mqtt_response_publish_s"] = time.perf_counter() - publish_start
+
+        wait_publish_start = time.perf_counter()
+        try:
+            publish_result.wait_for_publish()
+        except Exception:
+            pass
+        metrics["mqtt_response_wait_publish_s"] = time.perf_counter() - wait_publish_start
+        metrics["mqtt_response_ts"] = time.time()
+
         export_fields = {
             "queue_wait_s": metrics.get("queue_wait_s"),
             "preprocess_s": metrics.get("preprocess_s"),
@@ -382,6 +424,14 @@ class JetsonWorker:
             "llm_inference_s": metrics.get("llm_inference_s"),
             "compute_s": metrics.get("compute_s"),
             "total_runtime_s": metrics.get("total_runtime_s"),
+            "mqtt_request_json_deserialize_s": metrics.get("mqtt_request_json_deserialize_s"),
+            "mqtt_response_json_serialize_s": metrics.get("mqtt_response_json_serialize_s"),
+            "mqtt_response_publish_s": metrics.get("mqtt_response_publish_s"),
+            "mqtt_response_wait_publish_s": metrics.get("mqtt_response_wait_publish_s"),
+            "mqtt_receive_ts": metrics.get("mqtt_receive_ts"),
+            "mqtt_response_ts": metrics.get("mqtt_response_ts"),
+            "network_pi_to_jetson_s": metrics.get("network_pi_to_jetson_s"),
+            "sent_ts": metrics.get("sent_ts"),
             "received_ts": metrics.get("received_ts"),
             "process_start_ts": metrics.get("process_start_ts"),
             "process_end_ts": metrics.get("process_end_ts"),
@@ -401,8 +451,8 @@ class JetsonWorker:
         for transient_key in ("received_perf", "enqueue_perf"):
             metrics.pop(transient_key, None)
 
-        response_topic = f"{RESPONSE_TOPIC.rstrip('/')}/{job_id}" if job_id else RESPONSE_TOPIC
-        self.client.publish(response_topic, json.dumps(response), qos=QOS)
+        for transient_key in ("mqtt_receive_perf",):
+            metrics.pop(transient_key, None)
         _log(f"Published response for job id {job_id} to '{response_topic}'")
 
     def _publish_superseded(self, payload: Dict[str, Any]) -> None:
@@ -417,7 +467,9 @@ class JetsonWorker:
 
 def main() -> None:
     _log("Launching Jetson inference worker")
-    worker = JetsonWorker(preload_llm=True)  # Set to False to disable pre-loading
+    # Only preload LLM if USE_LLM_CONFIRMATION is enabled
+    preload_llm = getattr(config, "USE_LLM_CONFIRMATION", False)
+    worker = JetsonWorker(preload_llm=preload_llm)
 
     def handle_signal(_sig, _frame):
         _log("Received shutdown signal; stopping worker")

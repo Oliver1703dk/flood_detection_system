@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 import config
+from time import perf_counter
 
 try:  # pragma: no cover - optional dependency for remote inference
     import paho.mqtt.client as mqtt
@@ -99,8 +100,11 @@ class MQTTInferenceClient:
         if not topic.startswith(self.response_topic):
             return
 
+        # Time JSON deserialization
+        json_deserialize_start = perf_counter()
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
+            json_deserialize_duration = perf_counter() - json_deserialize_start
         except Exception:
             return
 
@@ -115,11 +119,14 @@ class MQTTInferenceClient:
             received_at = time.time()
             sent_at = self._sent_at.get(correlation_id, received_at)
             latency = received_at - sent_at
+            # Store JSON deserialize timing in response data if available
+            if isinstance(payload, dict) and "timing" in payload:
+                payload["timing"]["mqtt_json_deserialize_s"] = json_deserialize_duration
             self._payloads[correlation_id] = MQTTResponse(payload, latency, sent_at, received_at)
             event.set()
 
     # ------------------------------------------------------------------
-    def publish_request(self, message: Dict[str, object]) -> MQTTResponse:
+    def publish_request(self, message: Dict[str, object], timing_dict: Optional[Dict[str, float]] = None) -> MQTTResponse:
         """Publish a request and block until the response arrives or times out."""
 
         correlation_id = message.setdefault("id", uuid.uuid4().hex)
@@ -130,18 +137,43 @@ class MQTTInferenceClient:
             self._pending[correlation_id] = event
 
         try:
+            # Time JSON serialization
+            json_serialize_start = perf_counter()
             payload = json.dumps(message).encode("utf-8")
+            json_serialize_duration = perf_counter() - json_serialize_start
+            if timing_dict is not None:
+                timing_dict["mqtt_json_serialize_s"] = json_serialize_duration
+
             if len(payload) > config.MQTT_INFERENCE_MAX_PAYLOAD:
                 raise ValueError("Inference payload exceeds MQTT_INFERENCE_MAX_PAYLOAD")
 
+            # Time MQTT publish
+            mqtt_publish_start = perf_counter()
             result = self._client.publish(self.request_topic, payload, qos=self.qos)
+            mqtt_publish_duration = perf_counter() - mqtt_publish_start
+            if timing_dict is not None:
+                timing_dict["mqtt_publish_s"] = mqtt_publish_duration
+
+            # Time wait for publish confirmation
+            wait_publish_start = perf_counter()
             result.wait_for_publish(timeout=self.timeout_s)
+            wait_publish_duration = perf_counter() - wait_publish_start
+            if timing_dict is not None:
+                timing_dict["mqtt_wait_publish_s"] = wait_publish_duration
 
             with self._lock:
                 self._sent_at[correlation_id] = time.time()
 
+            # Time waiting for response
+            wait_response_start = perf_counter()
             if not event.wait(timeout=self.timeout_s):
+                wait_response_duration = perf_counter() - wait_response_start
+                if timing_dict is not None:
+                    timing_dict["mqtt_wait_response_s"] = wait_response_duration
                 raise TimeoutError("Timed out waiting for Jetson inference response")
+            wait_response_duration = perf_counter() - wait_response_start
+            if timing_dict is not None:
+                timing_dict["mqtt_wait_response_s"] = wait_response_duration
 
             with self._lock:
                 resp = self._payloads.pop(correlation_id)
@@ -169,7 +201,11 @@ class MQTTInferenceClient:
         self._client.disconnect()
 
 
-def encode_image_for_transport(image_bytes: bytes) -> str:
+def encode_image_for_transport(image_bytes: bytes, timing_dict: Optional[Dict[str, float]] = None) -> str:
     """Return a compact base64 representation suitable for MQTT."""
-
-    return base64.b64encode(image_bytes).decode("utf-8")
+    encode_start = perf_counter()
+    result = base64.b64encode(image_bytes).decode("utf-8")
+    encode_duration = perf_counter() - encode_start
+    if timing_dict is not None:
+        timing_dict["image_encode_s"] = encode_duration
+    return result

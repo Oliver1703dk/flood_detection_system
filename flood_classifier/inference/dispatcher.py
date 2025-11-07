@@ -7,6 +7,7 @@ the remote LLM adapter.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import config
@@ -44,9 +45,9 @@ class MQTTJetsonBackend:
     def is_healthy(self) -> bool:
         return self._client.is_healthy()
 
-    def _run_task(self, task: str, payload: Dict[str, object]) -> MQTTResponse:
+    def _run_task(self, task: str, payload: Dict[str, object], timing_dict: Optional[Dict[str, float]] = None) -> MQTTResponse:
         envelope = {"task": task, **payload}
-        response = self._client.publish_request(envelope)
+        response = self._client.publish_request(envelope, timing_dict=timing_dict)
         data = response.data
         if data.get("error"):
             raise RemoteInferenceError(str(data["error"]))
@@ -62,6 +63,7 @@ class MQTTJetsonBackend:
         metadata: Dict[str, object],
         sensor_data: Optional[Dict[str, Any]] = None,
         sensor_baseline: Optional[Dict[str, Any]] = None,
+        timing_dict: Optional[Dict[str, float]] = None,
     ) -> Dict[str, object]:
         payload = {
             "tier": tier.value,
@@ -74,9 +76,9 @@ class MQTTJetsonBackend:
             payload["sensor_data"] = sensor_data
         if sensor_baseline is not None:
             payload["sensor_baseline"] = sensor_baseline
-        response = self._run_task("yolo", payload)
+        response = self._run_task("yolo", payload, timing_dict=timing_dict)
         data = response.data
-        return {
+        result = {
             "detections": data.get("detections", []),
             "latency_s": response.latency_s,
             "request_id": data.get("id"),
@@ -84,6 +86,12 @@ class MQTTJetsonBackend:
             "received_at": response.received_at,
             "timing": data.get("timing"),
         }
+        # Merge timing_dict into result timing if available
+        if timing_dict and result.get("timing"):
+            result["timing"].update(timing_dict)
+        elif timing_dict:
+            result["timing"] = timing_dict
+        return result
 
     def run_llm(
         self,
@@ -95,6 +103,7 @@ class MQTTJetsonBackend:
         sensor_data: Optional[Dict[str, Any]] = None,
         sensor_baseline: Optional[Dict[str, Any]] = None,
         sensor_anomalies: Optional[Dict[str, Any]] = None,
+        timing_dict: Optional[Dict[str, float]] = None,
     ) -> Dict[str, object]:
         payload = {
             "frame_index": frame_index,
@@ -108,9 +117,9 @@ class MQTTJetsonBackend:
             payload["sensor_baseline"] = sensor_baseline
         if sensor_anomalies is not None:
             payload["sensor_anomalies"] = sensor_anomalies
-        response = self._run_task("llm", payload)
+        response = self._run_task("llm", payload, timing_dict=timing_dict)
         data = response.data
-        return {
+        result = {
             "prediction": data.get("prediction"),
             "latency_s": response.latency_s,
             "request_id": data.get("id"),
@@ -118,6 +127,12 @@ class MQTTJetsonBackend:
             "received_at": response.received_at,
             "timing": data.get("timing"),
         }
+        # Merge timing_dict into result timing if available
+        if timing_dict and result.get("timing"):
+            result["timing"].update(timing_dict)
+        elif timing_dict:
+            result["timing"] = timing_dict
+        return result
 
 
 class InferenceDispatcher:
@@ -168,12 +183,24 @@ class InferenceDispatcher:
         if self.remote_backend is None or not self.remote_backend.is_healthy():
             return None
 
+        # Create timing dictionary to collect all timing metrics
+        timing_dict: Dict[str, float] = {}
+
+        # Time image bytes retrieval
+        image_bytes_start = perf_counter()
         image_b64 = getattr(ctx, "image_b64", None)
         if not image_b64:
             image_bytes = ctx.image_bytes()
             if image_bytes is None:
                 raise ValueError("FrameContext must provide image data for remote inference")
-            image_b64 = encode_image_for_transport(image_bytes)
+            image_bytes_duration = perf_counter() - image_bytes_start
+            timing_dict["image_bytes_retrieve_s"] = image_bytes_duration
+            
+            # Time image encoding
+            image_b64 = encode_image_for_transport(image_bytes, timing_dict=timing_dict)
+        else:
+            image_bytes_duration = perf_counter() - image_bytes_start
+            timing_dict["image_bytes_retrieve_s"] = image_bytes_duration
 
         metadata = {
             "timestamp": ctx.metadata.get("timestamp"),
@@ -192,7 +219,14 @@ class InferenceDispatcher:
             metadata=metadata,
             sensor_data=ctx.sensor_data,
             sensor_baseline=ctx.metadata.get("sensor_baseline"),
+            timing_dict=timing_dict,
         )
+        
+        # Merge timing from result
+        result_timing = result.get("timing", {})
+        if isinstance(result_timing, dict):
+            result_timing.update(timing_dict)
+        
         return DispatcherResult(
             detections=result.get("detections", []),
             tier=requested_tier,
@@ -203,7 +237,7 @@ class InferenceDispatcher:
                 "request_id": result.get("request_id"),
                 "sent_at": result.get("sent_at"),
                 "received_at": result.get("received_at"),
-                "timing": result.get("timing"),
+                "timing": result_timing,
             },
         )
 
@@ -220,9 +254,19 @@ class InferenceDispatcher:
         if not self.remote_backend.is_healthy():
             return None
 
+        # Create timing dictionary to collect all timing metrics
+        timing_dict: Dict[str, float] = {}
+
+        # Time image bytes retrieval
+        image_bytes_start = perf_counter()
         image_bytes = ctx.image_bytes()
         if image_bytes is None:
             return None
+        image_bytes_duration = perf_counter() - image_bytes_start
+        timing_dict["image_bytes_retrieve_s"] = image_bytes_duration
+
+        # Time image encoding
+        image_b64 = encode_image_for_transport(image_bytes, timing_dict=timing_dict)
 
         metadata = {
             "timestamp": ctx.metadata.get("timestamp"),
@@ -231,12 +275,22 @@ class InferenceDispatcher:
             "video_timestamp_sec": ctx.metadata.get("video_timestamp_sec"),
         }
         result = self.remote_backend.run_llm(
-            image_b64=encode_image_for_transport(image_bytes),
+            image_b64=image_b64,
             frame_index=frame_index,
             fsm_state=state,
             metadata=metadata,
             sensor_data=ctx.sensor_data,
             sensor_baseline=ctx.metadata.get("sensor_baseline"),
             sensor_anomalies=ctx.metadata.get("sensor_anomalies"),
+            timing_dict=timing_dict,
         )
+        
+        # Merge timing from result
+        if isinstance(result, dict):
+            result_timing = result.get("timing", {})
+            if isinstance(result_timing, dict):
+                result_timing.update(timing_dict)
+            elif not result_timing:
+                result["timing"] = timing_dict
+        
         return result
