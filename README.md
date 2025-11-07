@@ -55,7 +55,7 @@ All tunable settings such as image size, classification mode and MQTT broker det
 
 ### Distributed Inference (Pi ↔ Jetson)
 
-The Pi can now offload heavy computer vision or LLM inference tasks to a Jetson over MQTT. Key settings live near the bottom of `config.py`:
+The Pi can now offload heavy computer vision or LLM inference tasks to a Jetson over MQTT. The Jetson also hosts the MQTT broker (typically Mosquitto), so both Pis set `MQTT_BROKER_URL` to the Jetson's IP or hostname. Key settings live near the bottom of `config.py`:
 
 - `INFERENCE_ROUTING` controls which FSM states run locally (`S0`, `S5`) and which trigger remote execution (default for `S1`–`S3`).
 - `LOCAL_YOLO_TIER` defines the heaviest YOLO model tier that remains on the Pi (`"nano"` by default). Larger tiers automatically route to the Jetson even if the FSM state is local.
@@ -79,7 +79,7 @@ This project is a work in progress aimed at exploring multimodal flood detection
 
 The Jetson service should be a lightweight Python process that:
 
-1. Connects to the same MQTT broker and subscribes to `inference/request` and publishes to `inference/response/<job-id>` using QoS 1.
+1. Runs (or connects locally to) the Jetson-hosted MQTT broker and subscribes to `inference/request`, publishing to `inference/response/<job-id>` using QoS 1.
 2. Accepts JSON payloads with fields `{ "task": "yolo" | "llm", "tier": "small", "image_b64": "...", "metadata": {...} }`.
 3. For `task == "yolo"`, loads all available YOLOv8 models for the requested tier (TensorRT preferable), runs inference on each, aggregates the results using the same logic as the Pi, and returns `{"detections": [...], "id": <job-id>}` with the same detection schema produced by `ResultFormatter`.
 4. For `task == "llm"`, invokes the configured LLM or vision model, returning `{ "prediction": 0|1|2, "id": <job-id> }`.

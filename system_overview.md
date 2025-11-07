@@ -2,8 +2,8 @@
 
 This document summarizes the production architecture for the distributed flood
 detection system spanning two Raspberry Pi devices and an NVIDIA Jetson. The
-components coordinate via MQTT messaging and share a common storage layout and
-configuration surface.
+components coordinate via a Jetson-hosted MQTT messaging layer and share a
+common storage layout and configuration surface.
 
 ## 1. Gathering Pi (Sensor & Image Capture)
 - Runs `main_final.py` in collector mode to refresh `.env` secrets, read feature flags from `config.py`, and instantiate camera, Netatmo sensor (or simulator), metadata enrichment, and MQTT handlers.
@@ -11,7 +11,7 @@ configuration surface.
 - Each acquisition cycle captures or synthesizes an image, gathers sensor readings, and enriches metadata with timestamps, GPS, motion hints, and resource flags.
 - `edge_data_collector.formatter.format_data` publishes a dictionary with three top-level keys: `image_data` (base64-encoded JPEG for the current frame), `sensor_data` (static temperature, humidity, and pressure from `StaticSensorHandler`), and `metadata`.
 - MQTT `metadata` includes enrichment from `MetadataHandler.add_metadata` plus the video-specific fields populated in `main_video.py:310-337`: `timestamp` (ISO8601 send time), `location` (`"50.8503,4.3517"`), `camera_id` (`"video_camera_01"`), `motion` (`"slow"`), `resource_constrained` (`False`), `video_timestamp_sec` (aligned video second rounded to three decimals, `None` only when FPS is unavailable), and `video_file` (e.g., `"flood_video_20251005_150618.mp4"`).
-- When `USE_MQTT` is enabled, `edge_data_sender.transmission.mqtt_handler.MqttHandler` publishes the payload to the shared broker/topic; otherwise the payload prints for manual inspection.
+- When `USE_MQTT` is enabled, `edge_data_sender.transmission.mqtt_handler.MqttHandler` publishes the payload to the Jetson-hosted broker/topic; otherwise the payload prints for manual inspection.
 - Support scripts refresh Netatmo OAuth tokens, persist credentials to `.env`, and retain captured images under `edge_data_collector/camera/images` for replay.
 
 ## 2. Processing Pi: Core Data Pipeline and Decision Logic
@@ -50,9 +50,11 @@ The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives th
 - **Result Persistence**: `DataResultsSaver` writes enriched decisions to `storage/data_results/`, capturing image metadata, sensor deltas, FSM state, model tier usage, backend provenance, scores, and final classification for each frame.
 
 ## 3. Jetson Worker (Remote Inference Node)
-The Jetson worker provides heavyweight YOLO and local VLM inference for frames escalated by the Processing Pi.
+The Jetson worker provides heavyweight YOLO and local VLM inference for frames
+escalated by the Processing Pi and also hosts the MQTT broker (Mosquitto by
+default) that both Pis connect to for telemetry and inference exchanges.
 
-- **Connectivity and Queuing**: The worker subscribes to MQTT request topics, advertises availability through a retained heartbeat every 10 seconds, and manages two task types (`yolo` and `llm`). A single-job queue retains only the latest request, superseding older jobs when new payloads arrive.
+- **Connectivity and Queuing**: The worker subscribes to MQTT request topics locally, advertises availability through a retained heartbeat every 10 seconds, and manages two task types (`yolo` and `llm`). A single-job queue retains only the latest request, superseding older jobs when new payloads arrive.
 - **YOLO Processing Pipeline**:
   1. Preprocessing: decode base64 imagery, resize, and normalize using the shared image processor.
   2. Model caching: lazily load all checkpoints for the requested tier on first use and reuse them for subsequent frames.
@@ -67,7 +69,7 @@ The Jetson worker provides heavyweight YOLO and local VLM inference for frames e
 ## 4. Data Flow Summary
 - End-to-end pipeline:
   1. Gathering Pi captures image and sensor snapshot.
-  2. Gathering Pi publishes the normalized payload over MQTT.
+  2. Gathering Pi publishes the normalized payload over the Jetson-hosted MQTT broker.
   3. Processing Pi ingests, validates, and archives the raw frame.
   4. FSM normalizes the frame context and retrieves baselines.
   5. FSM selects a model tier and routing policy.

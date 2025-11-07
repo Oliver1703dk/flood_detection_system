@@ -6,7 +6,7 @@ This guide walks through preparing both the Raspberry Pi (orchestration node) an
 
 ## 1. Shared Prerequisites
 
-- Access to a common MQTT broker reachable by both devices.
+- Access to the Jetson-hosted MQTT broker (e.g., Mosquitto) reachable by both devices.
 - Matching copies of this repository (or the relevant subfolders) on the Pi and Jetson.
 - YOLO model weights placed under `yolov8_processor/model/<tier>/best*.pt` on the respective device (nano on the Pi, larger tiers on the Jetson).
 - Any required API keys or credentials stored in environment variables (e.g., `OPENAI_API_KEY` for LLM inference).
@@ -31,7 +31,7 @@ This guide walks through preparing both the Raspberry Pi (orchestration node) an
 
 3. **Repository configuration**
    - Edit `config.py`:
-     - Set `MQTT_BROKER_URL`, `MQTT_BROKER_PORT`, and the inference topics/timeouts to match your broker.
+     - Set `MQTT_BROKER_URL`, `MQTT_BROKER_PORT`, and the inference topics/timeouts so the Pi points to the Jetson-hosted broker.
      - Ensure `LOCAL_YOLO_TIER = "nano"` (default) so the Pi keeps the light model locally.
      - Adjust `INFERENCE_ROUTING` if you need different state-based routing.
    - Confirm the nano weights exist under `yolov8_processor/model/nano/`.
@@ -68,9 +68,10 @@ This guide walks through preparing both the Raspberry Pi (orchestration node) an
    Install any extra libraries required for optimized inference (TensorRT bindings, etc.).
 
 3. **Repository configuration**
-   - Mirror the Pi’s `config.py` (at least for MQTT settings). You may keep other values identical unless the Jetson needs device-specific overrides.
+   - Mirror the Pi's `config.py` (at least for MQTT settings) but keep `MQTT_BROKER_URL` at `localhost` when the broker runs on this Jetson.
    - Place heavier YOLO weights (e.g., `small`, `medium`, `large`, `xlarge`) under `yolov8_processor/model/<tier>/`.
    - Set environment variables for the LLM if using a hosted API (e.g., `export OPENAI_API_KEY=...`).
+   - Install and start Mosquitto (or your chosen broker) so remote Pis can connect to this Jetson instance.
 
 4. **Run the inference worker**
    ```bash
