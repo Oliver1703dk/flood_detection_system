@@ -1,136 +1,283 @@
-**Evaluation Protocol**
+# **📋 Updated Evaluation Guide for Full MQTT Pipeline**
 
-This protocol defines how the distributed flood detection system will be evaluated in real-world conditions across three key metrics: **latency**, **accuracy**, and **energy efficiency**. The evaluation ensures reproducibility, transparency, and alignment with typical applied AI research standards.
+**(Fully Revised Protocol with External HMC Power Measurement, Manual Ground Truth Annotation, and All Required Adjustments)**
 
----
+## **🏗️ System Architecture** 
 
-### 1. Preparation and Baseline Setup
+Your evaluation uses the **3-node distributed architecture**:
 
-1. **Dataset synchronization**
-
-   * Copy the full test video set and corresponding hand-labelled ground-truth JSONL files onto the **Processing Pi**.
-   * Verify that each entry matches on `camera_id`, `video_file`, and `video_timestamp_sec`.
-
-2. **Instrumentation check**
-
-   * Confirm correct operation of `main_final.py` on the Processing Pi, including timing logs for pipeline and queue stages.
-   * Ensure the Jetson worker is running with inference timing logs enabled.
-   * Attach external power monitors to both the Pi and Jetson for energy recording.
-
-3. **Environment snapshot**
-
-   * Record active software versions, configuration file (`config.py`), selected model tiers, and current network conditions.
-   * Save this snapshot in `storage/env_snapshots/` for reproducibility.
+1. **Gathering/Collector Pi**: Captures camera \+ Netatmo sensor data → publishes to MQTT `sensor/data`  
+2. **Processing Pi**: Subscribes to `sensor/data` → validates → runs classification → saves results  
+3. **Jetson Worker** (some configs): Handles offloaded heavy YOLO tiers \+ optional LLM
 
 ---
 
-### 2. Latency Evaluation (Processing Pi + Jetson)
+## **📝 Preparation Steps** 
 
-1. **System execution**
+### **1\. Create Configuration Variants**
 
-   * Run `python main_final.py` on the Processing Pi and replay the collector dataset.
-   * Replays can be performed either through live MQTT publishing or scripted re-send of stored data.
+- Duplicate `config.py` → `config_ablation1.py` … `config_ablation4.py`
 
-2. **Data collection**
+### **2\. Create Entry Point Scripts**
 
-   * Extract per-frame timing data from the stored decision files, including:
+- Duplicate `main_final.py` → `main_ablation1.py` … `main_ablation4.py`  
+- Each imports its corresponding config
 
-     * `pipeline_latency_s`
-     * Queue waiting time
-     * FSM and backend metrics
-     * `backend_*_ts` timestamps
-   * Export all timing data to CSV for post-processing.
+### **3\. Add Sensor Fusion Toggle** 
 
-3. **Analysis**
+- Modify `ClassifierBoth` to accept `disable_sensor_fusion` flag
 
-   * Compute **p50**, **p90**, and **p99** latency percentiles for the entire pipeline.
-   * Split latency statistics by **backend** (local vs remote) and **model_tier** (small, medium, large).
-   * Break down component-level timings: preprocessing, inference, LLM, and baseline updates.
-   * Validate MQTT round-trip latency by comparing `backend_roundtrip_s` against internal inference times and flag outliers.
+### **4\. Update FSM Strategy Initialization (unchanged)**
 
----
+- Allow `vision_only=True` parameter
 
-### 3. Accuracy Evaluation (Prediction vs Ground Truth)
+### **5\. Disable Internal Energy Tracking**
 
-1. **Comparison script**
+In **every** `config_ablationN.py` add:
 
-   * Develop a Python script to join system outputs with ground-truth JSONL labels using `video_file` and `video_timestamp_sec` (or frame index).
-   * Extract for each frame: predicted flood state (`prediction`, `FrameDecision.state`) and the expected label.
-
-2. **Metrics computation**
-
-   * Compute confusion matrix (TP, FP, TN, FN).
-   * Derive **accuracy**, **precision**, **recall**, **specificity**, **F1 score**, and **balanced accuracy**.
-   * Compute **per-state accuracy** (S0–S3) to analyze FSM escalation effectiveness.
-
-3. **Configuration experiments**
-
-   * Repeat evaluation under varied configurations:
-
-     * Local-only inference
-     * Remote inference enabled
-     * Different model tiers
-   * Quantify performance trade-offs among these settings.
-
-4. **Error inspection**
-
-   * Log and analyze misclassified frames.
-   * Correlate misclassifications with latency values and sensor readings to identify root causes.
+ENABLE\_FSM\_ENERGY\_TRACKING \= False   \# Disable software energy tracking to eliminate CPU overhead during external HMC measurement
 
 ---
 
-### 4. Energy Evaluation (Processing Pi + Jetson)
+## **📹 Ground Truth Annotation** 
 
-1. **Measurement setup**
+### **Before Running Any Evaluations:**
 
-   * Use smart plugs, INA monitors, or Jetson’s `tegrastats` to record power usage.
-   * Synchronize timestamps between power logs and pipeline events.
+1. **Select test video(s)**  
+     
+   - Representative flood/no-flood transitions  
+   - Varied lighting, weather, time of day  
+   - Minimum 300–500 frames for statistical significance
 
-2. **Measurement phases**
+   
 
-   * Record power during:
+2. **Manual frame-by-frame annotation**  
+     
+   - Labels: `0` \= no-flood, `1` \= watch/some water, `2` \= flood  
+   - Record exact frame number or timestamp
 
-     * **Idle phase** (system on, no data).
-     * **Baseline phase** (system running, no active replay).
-     * **Active phase** (during replay).
+   
 
-3. **Computation**
+3. **Output format** → `ground_truth_annotations.csv`:
 
-   * Calculate:
+video\_file,frame\_number,timestamp\_sec,label,notes
 
-     * Mean and peak power consumption (W).
-     * Energy per frame (J/frame).
-   * Correlate energy data with backend type and model tier.
-   * Build an **energy–latency–accuracy trade-off table** summarizing efficiency across configurations.
+flood\_video\_001.mp4,0,0.0,0,Clear road
 
----
+flood\_video\_001.mp4,30,1.0,0,Still clear
 
-### 5. Reporting and Validation
+flood\_video\_001.mp4,60,2.0,1,Water appearing
 
-1. **Result summary**
+flood\_video\_001.mp4,90,3.0,2,Fully flooded
 
-   * Aggregate and log all metrics, including dataset version, configurations, latency percentiles, accuracy statistics, and energy totals.
+...
 
-2. **Visualization**
-
-   * Plot latency and energy distributions.
-   * Include FSM state transitions and annotate outliers.
-
-3. **Regression tracking**
-
-   * Re-run this protocol after any major software or configuration update.
-   * Store all runs in a shared repository for longitudinal performance comparison.
-
-4. **Automation (optional)**
-
-   * Implement a script to replay datasets, extract metrics, and generate Markdown summaries automatically for repeatable evaluations.
+4. **Replay consistency**  
+   - Collector must publish the exact same video at fixed FPS (e.g., 1 fps)  
+   - Include `video_file` and `video_timestamp_sec` in MQTT metadata
 
 ---
 
-### 6. Recommended Extensions for Publication
+## **⚡ HMC Power Analyzer Setup** 
 
-* Add **environmental robustness tests** (lighting, weather, camera angle).
-* Include **confidence intervals** or variance across multiple runs.
-* Compare with a **baseline single-model detector** to quantify FSM and multi-tier gains.
+### **Hardware Configuration**
 
-This finalized evaluation plan is complete for research reporting and aligns with common practices in embedded AI and edge-computing system papers.
+- **Processing Pi**: HMC between PSU and Pi (≥10 Hz sampling)  
+- **Jetson** (Configs 2 & 4): Separate HMC on Jetson PSU  
+- Log format: `timestamp, voltage_V, current_A, power_W`  
+- Synchronize clocks on Pi, Jetson, and HMC via NTP
+
+### **Baseline Measurement**
+
+- Record 30 s idle power before each run  
+- Subtract baseline from active measurements
+
+### **Synchronization Strategy**
+
+- Note exact wall-clock start/end time when launching `main_ablationN.py`  
+- Each result JSON contains `process_start_ts` (wall-clock timestamp)  
+- Align power samples using absolute timestamps
+
+---
+
+## **🎯 Configuration 1: Static Medium-YOLO Only (Baseline – unchanged logic, updated settings)**
+
+**What to Change in `config_ablation1.py`:**
+
+CLASSIFICATION\_MODE \= "yolo\_sensor"
+
+MODEL\_SIZE \= "medium"
+
+MODEL\_NUMBER \= 1
+
+USE\_LLM\_CONFIRMATION \= False
+
+ENABLE\_FSM\_ENERGY\_TRACKING \= False
+
+\# Vision-only (disable sensor fusion)
+
+\# Pass disable\_sensor\_fusion=True in YoloSensorStrategy
+
+No Jetson needed.
+
+---
+
+## **🎯 Configuration 2: Vision-Only \+ FSM \+ Multi-Model \+ Offload**
+
+**What to Change in `config_ablation2.py`:**
+
+CLASSIFICATION\_MODE \= "fsm"
+
+MODEL\_SIZE \= "nano"
+
+MODEL\_NUMBER \= 3
+
+LOCAL\_YOLO\_TIER \= "small"          \# medium/large → Jetson
+
+ENABLE\_FSM\_ENERGY\_TRACKING \= False
+
+\# Pass vision\_only=True → ClassifierBoth(disable\_sensor\_fusion=True)
+
+Jetson required.
+
+---
+
+## **🎯 Configuration 3: Full System Local-Only (No Offload, With Sensor Fusion)**
+
+**What to Change in `config_ablation3.py`:**
+
+CLASSIFICATION\_MODE \= "fsm"
+
+MODEL\_SIZE \= "nano"
+
+MODEL\_NUMBER \= 3
+
+\# Force everything local
+
+INFERENCE\_ROUTING \= {"S0": "local", "S1": "local", "S2": "local", "S3": "local", "S5": "local", "default": "local"}
+
+USE\_DEFAULT\_BASELINE \= True
+
+ENABLE\_FSM\_ENERGY\_TRACKING \= False
+
+\# Sensor fusion ENABLED (default)
+
+No Jetson needed.
+
+---
+
+## **🎯 Configuration 4: Full System Remote-Enabled (Production configuration)**
+
+**What to Change in `config_ablation4.py`:**
+
+CLASSIFICATION\_MODE \= "fsm"
+
+MODEL\_SIZE \= "nano"
+
+MODEL\_NUMBER \= 3
+
+LOCAL\_YOLO\_TIER \= "small"
+
+USE\_DEFAULT\_BASELINE \= True
+
+ENABLE\_FSM\_ENERGY\_TRACKING \= False
+
+\# Default routing: medium/large → Jetson
+
+\# Sensor fusion ENABLED
+
+Jetson required.
+
+---
+
+## **📊 Execution Matrix (unchanged)**
+
+| Config | Nodes Running | Jetson | Sensor Fusion | Key Focus |
+| :---- | :---- | :---: | :---: | :---- |
+| 1 | Collector \+ Processor | ❌ | ❌ | Static baseline |
+| 2 | Collector \+ Processor \+ Jetson | ✅ | ❌ | FSM \+ offload (vision-only) |
+| 3 | Collector \+ Processor | ❌ | ✅ | Full system local-only |
+| 4 | Collector \+ Processor \+ Jetson | ✅ | ✅ | Full production system |
+
+---
+
+## **🔬 Data Collection Strategy** 
+
+### **For Each Configuration (run 3–5 times):**
+
+1. **Pre-run**  
+     
+   - Clear or create dated result folder  
+   - Start HMC recording (both Pi and Jetson if applicable)  
+   - Record idle baseline (30 s)  
+   - Note exact start wall-clock time
+
+   
+
+2. **During run**  
+     
+   - Replay the **exact same annotated video** at fixed FPS  
+   - Process fixed number of frames (e.g., 500\) or fixed duration (e.g., 5 min)  
+   - Let system save results to `storage/data_results/YYYY-MM-DD/<timestamp>.json`
+
+   
+
+3. **Immediately after run**  
+     
+   - Note exact end wall-clock time  
+   - Stop HMC recording  
+   - Save power logs as `power_ablationN_runX_pi.csv` and `power_ablationN_runX_jetson.csv`
+
+   
+
+4. **Post-run analysis** (automated scripts recommended)
+
+| Metric | Source | Extraction Method | Notes |
+| :---- | :---- | :---- | :---- |
+| **Accuracy (F1, Precision, Recall)** | JSON predictions vs `ground_truth_annotations.csv` | Match by `video_file` \+ `video_timestamp_sec` or frame number → compare `final_prediction`/`decision.prediction` | Per-config, per-state (FSM) |
+| **Latency (p50/p90/p99)** | JSON `timing.pipeline_latency_s` | Collect all frames → numpy percentile | Breakdown: inference, classification, queue, backend |
+| **Energy per frame (J)** | HMC power logs | Integrate power over exact run window → subtract idle baseline → total\_J / frame\_count | Sum Pi \+ Jetson for distributed configs |
+| **State transitions** | JSON `decision.state` (FSM only) | Count transitions, compute dwell time per state | FSM configs only |
+| **Tier usage** | JSON `decision.model_tier` (FSM only) | Histogram nano/small/medium/large | FSM configs only |
+| **Queue superseding** | Console "superseded" messages | Grep/count logs | Remote configs only |
+
+---
+
+## **🔬 Updated Hypothesis Validation**
+
+### **H1: Adaptive Tiering & Offload (Efficiency)**
+
+**Config 1 → Config 4**
+
+- Mean latency reduction ≥20%?  
+- Energy per frame reduction ≥20%?  
+- F1-score degradation ≤5%?
+
+### **H2: Motion-Aware Escalation & Hysteresis (Stability)**
+
+**Config 2 → Config 4**
+
+- Label oscillations (consecutive flips) reduced ≥15%?  
+- P99 latency lower/tighter?  
+- Longer average state dwell time?
+
+### **H3: Diurnal Sensor Fusion (Environmental Robustness)**
+
+**Config 2 (vision-only) → Config 3 (with fusion)**
+
+- False positives reduced ≥15%?  
+- Missed floods reduced ≥15%?  
+- Mean latency increase ≈0?
+
+---
+
+## **✅ Final Checklist (Before Starting Evaluations)**
+
+- [ ] Ground truth CSV completed and verified  
+- [ ] HMC analyzers connected, calibrated, ≥10 Hz  
+- [ ] NTP clock sync on Pi, Jetson, and HMC PC  
+- [ ] `ENABLE_FSM_ENERGY_TRACKING = False` in all 4 config files  
+- [ ] Test video replays identically (same FPS, same metadata)  
+- [ ] Post-processing scripts ready (JSON parsing, power integration, accuracy comparison)  
+- [ ] Storage directories clean or dated  
+- [ ] Idle baseline power measured
