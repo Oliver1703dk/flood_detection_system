@@ -3,6 +3,7 @@
 # - FSM enabled, multi-model consensus, sensor fusion enabled, remote offload enabled
 
 from pathlib import Path
+from platform_utils import PLATFORM_YOLO_TIER
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"
@@ -88,7 +89,8 @@ INFERENCE_ROUTING = {
 }
 
 # ABLATION 4: Tiers above small go to Jetson
-LOCAL_YOLO_TIER = "small"
+# ABLATION 4: Platform-specific tier (nano on Pi, small on Jetson)
+LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 
 # Local LLM Configuration (can be enabled for testing)
 USE_LOCAL_LLM = False

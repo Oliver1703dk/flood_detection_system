@@ -3,6 +3,7 @@
 # - Single medium model, no FSM, no sensor fusion, no offload
 
 from pathlib import Path
+from platform_utils import PLATFORM_YOLO_TIER
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"

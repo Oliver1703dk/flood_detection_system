@@ -4,6 +4,7 @@
 # - Tests multi-model consensus effect vs config_ablation1 (1x medium)
 
 from pathlib import Path
+from platform_utils import PLATFORM_YOLO_TIER
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"

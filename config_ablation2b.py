@@ -4,6 +4,7 @@
 # - Tests FSM without multi-model consensus vs config_ablation2 (3x nano)
 
 from pathlib import Path
+from platform_utils import PLATFORM_YOLO_TIER
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"
@@ -88,8 +89,8 @@ INFERENCE_ROUTING = {
     "default": "remote",
 }
 
-# ABLATION 2b: Tiers above small go to Jetson
-LOCAL_YOLO_TIER = "small"
+# ABLATION 2b: Platform-specific tier (nano on Pi, small on Jetson)
+LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 
 # Local LLM Configuration (not used)
 USE_LOCAL_LLM = False

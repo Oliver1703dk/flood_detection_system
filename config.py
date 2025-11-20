@@ -1,6 +1,7 @@
 # config.py
 
 from pathlib import Path
+from platform_utils import PLATFORM_YOLO_TIER
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DETECTION_OUTPUT_DIR = PROJECT_ROOT / "storage" / "image-detections"
@@ -114,7 +115,8 @@ INFERENCE_ROUTING = {
 
 # Default YOLO tier to keep on the Pi. Tiers above this automatically target
 # the Jetson regardless of FSM state. The string must match ModelTier values.
-LOCAL_YOLO_TIER = "nano"
+# Platform-specific: nano on Pi, small on Jetson
+LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 
 
 
