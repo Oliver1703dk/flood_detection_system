@@ -14,6 +14,7 @@ class ClassifierBoth:
     def __init__(self, 
                  baseline_calculator=None, 
                  image_classifier=None,
+                 disable_sensor_fusion=False,  # Disable sensor fusion for vision-only evaluation
                  humidity_threshold=25,       # ΔRH threshold
                  temperature_threshold=-2.5,      # ΔT threshold (i.e. drop > 2°C)
                  pressure_threshold=-5,         # ΔP threshold (i.e. drop > 1 unit)
@@ -24,6 +25,7 @@ class ClassifierBoth:
                  threshold_high=0.6):           # Combined score high threshold
         self.baseline_calculator = baseline_calculator or BaselineCalculator()
         self.image_classifier = image_classifier or EnhancedImageClassifier()
+        self.disable_sensor_fusion = disable_sensor_fusion
         self.humidity_threshold = humidity_threshold
         self.temperature_threshold = temperature_threshold
         self.pressure_threshold = pressure_threshold
@@ -37,46 +39,53 @@ class ClassifierBoth:
         if timestamp is None:
             timestamp = datetime.utcnow()
 
-        # Retrieve baseline for the current time window
-        baseline = self.baseline_calculator.get_baseline_for_time(timestamp)
+        # Initialize sensor fusion outputs
         anomalies = {}
         sensor_boost = 0
-        if baseline is not None:
-            # Compute sensor deltas for each metric
-            for key in ["temperature", "humidity", "pressure"]:
-                baseline_val = baseline.get(key + "_baseline")
-                current_val = sensor_data.get(key)
-                if baseline_val is not None and current_val is not None:
-                    anomalies["delta_" + key] = current_val - baseline_val
-                else:
-                    anomalies["delta_" + key] = 0
+        baseline = None
+        
+        # Skip sensor fusion if disabled (for vision-only evaluation)
+        if not self.disable_sensor_fusion:
+            # Retrieve baseline for the current time window
+            baseline = self.baseline_calculator.get_baseline_for_time(timestamp)
+            if baseline is not None:
+                # Compute sensor deltas for each metric
+                for key in ["temperature", "humidity", "pressure"]:
+                    baseline_val = baseline.get(key + "_baseline")
+                    current_val = sensor_data.get(key)
+                    if baseline_val is not None and current_val is not None:
+                        anomalies["delta_" + key] = current_val - baseline_val
+                    else:
+                        anomalies["delta_" + key] = 0
 
-            # # Apply thresholds to determine boost to the flood score
-            # if anomalies.get("delta_humidity", 0) > self.humidity_threshold:
-            #     sensor_boost += self.humidity_weight
-            # if anomalies.get("delta_temperature", 0) < self.temperature_threshold:
-            #     sensor_boost += self.temperature_weight
-            # if anomalies.get("delta_pressure", 0) < self.pressure_threshold:
-            #     sensor_boost += self.pressure_weight
-            # NEW ---------------------------------------------
-            dh = anomalies.get("delta_humidity", 0)
-            dt = anomalies.get("delta_temperature", 0)
-            dp = anomalies.get("delta_pressure", 0)
+                # # Apply thresholds to determine boost to the flood score
+                # if anomalies.get("delta_humidity", 0) > self.humidity_threshold:
+                #     sensor_boost += self.humidity_weight
+                # if anomalies.get("delta_temperature", 0) < self.temperature_threshold:
+                #     sensor_boost += self.temperature_weight
+                # if anomalies.get("delta_pressure", 0) < self.pressure_threshold:
+                #     sensor_boost += self.pressure_weight
+                # NEW ---------------------------------------------
+                dh = anomalies.get("delta_humidity", 0)
+                dt = anomalies.get("delta_temperature", 0)
+                dp = anomalies.get("delta_pressure", 0)
 
-            if dh > self.humidity_threshold:
-                sensor_boost += self._graduated_weight(
-                    dh, self.humidity_threshold, self.humidity_weight)
+                if dh > self.humidity_threshold:
+                    sensor_boost += self._graduated_weight(
+                        dh, self.humidity_threshold, self.humidity_weight)
 
-            if dt < self.temperature_threshold:
-                sensor_boost += self._graduated_weight(
-                    dt, self.temperature_threshold, self.temperature_weight)
+                if dt < self.temperature_threshold:
+                    sensor_boost += self._graduated_weight(
+                        dt, self.temperature_threshold, self.temperature_weight)
 
-            if dp < self.pressure_threshold:
-                sensor_boost += self._graduated_weight(
-                    dp, self.pressure_threshold, self.pressure_weight)
+                if dp < self.pressure_threshold:
+                    sensor_boost += self._graduated_weight(
+                        dp, self.pressure_threshold, self.pressure_weight)
 
+            else:
+                print("Baseline not available; relying on image classifier only.")
         else:
-            print("Baseline not available; relying on image classifier only.")
+            print("Sensor fusion disabled; using vision-only classification.")
 
         # Calculate image-based flood score
         image_score = self.image_classifier.calculate_flood_score(detection_data, image_size)

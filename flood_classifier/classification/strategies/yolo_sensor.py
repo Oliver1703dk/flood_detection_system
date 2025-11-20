@@ -16,9 +16,13 @@ class YoloSensorStrategy(ClassificationStrategy):
     """Classification using YOLO detections combined with sensor data."""
 
     def __init__(self):
+        # Read sensor fusion toggle from config for evaluation ablations
+        disable_sensor_fusion = getattr(config, 'DISABLE_SENSOR_FUSION', False)
+        
         self.classifier = ClassifierBoth(
             baseline_calculator=BaselineCalculator(),
             image_classifier=EnhancedImageClassifier(),
+            disable_sensor_fusion=disable_sensor_fusion,
         )
         self.formatter = ClassificationFormatter()
         self.llm_detector = LLMImageDetector() if config.USE_LLM_CONFIRMATION else None

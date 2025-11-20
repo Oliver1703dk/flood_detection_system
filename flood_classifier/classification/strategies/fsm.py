@@ -11,14 +11,20 @@ from flood_classifier.fsm.flood_fsm import (
     FrameDecision,
     decision_to_dict,
 )
+from flood_classifier.inference.classifier_both import ClassifierBoth
 
 _default_fsm: Optional[FloodFSM] = None
 
 
-def _get_default_fsm() -> FloodFSM:
+def _get_default_fsm(vision_only: bool = False) -> FloodFSM:
     global _default_fsm
     if _default_fsm is None:
-        _default_fsm = FloodFSM()
+        # Create classifier with sensor fusion disabled if vision_only mode
+        if vision_only:
+            classifier = ClassifierBoth(disable_sensor_fusion=True)
+            _default_fsm = FloodFSM(classifier=classifier)
+        else:
+            _default_fsm = FloodFSM()
     return _default_fsm
 
 
@@ -36,8 +42,8 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
 class FSMStrategy(ClassificationStrategy):
     """Classification strategy backed by :class:`FloodFSM`."""
 
-    def __init__(self, fsm: Optional[FloodFSM] = None) -> None:
-        self._fsm = fsm if fsm is not None else _get_default_fsm()
+    def __init__(self, fsm: Optional[FloodFSM] = None, vision_only: bool = False) -> None:
+        self._fsm = fsm if fsm is not None else _get_default_fsm(vision_only=vision_only)
 
     def classify(self, detection_results, message):  # type: ignore[override]
         """Ignore external detections and delegate to the FSM."""
