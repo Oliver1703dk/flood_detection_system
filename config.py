@@ -40,7 +40,7 @@ IMPORTANCE = {
 
 # You can add any other configuration variables you need
 # For example, MQTT settings or sensor model paths:
-MQTT_BROKER_URL = "localhost"
+MQTT_BROKER_URL = "192.168.20.1"  # Jetson's IP on processor subnet
 MQTT_BROKER_PORT = 1883
 MQTT_TOPIC = "sensor/data"
 
