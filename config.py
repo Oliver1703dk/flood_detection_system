@@ -118,6 +118,10 @@ INFERENCE_ROUTING = {
 # Platform-specific: nano on Pi, small on Jetson
 LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 
+# Pre-warm models at startup to avoid cold-start delays
+# Set to False to disable model pre-warming (models will load on first use)
+PREWARM_MODELS = True
+
 
 
 # Local LLM Configuration

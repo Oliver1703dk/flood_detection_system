@@ -252,6 +252,12 @@ class ModelManager:
         self._active_tier: Optional[ModelTier] = None
         self._last_switch_frame: int = -params.model_cooldown
         self._dispatcher = dispatcher
+        # Model cache to keep models in memory for faster switching
+        self._model_cache: Dict[ModelTier, Any] = {}
+        # Track first inference per tier for cold-start detection
+        self._tier_first_inference: Dict[ModelTier, bool] = {}
+        # Track model switch overhead timing
+        self._switch_overhead_s: Optional[float] = None
 
     @property
     def active_tier(self) -> Optional[ModelTier]:
@@ -271,6 +277,45 @@ class ModelManager:
             True if the tier is configured for local execution, False otherwise
         """
         return tier in self.params.tier_paths and self.params.tier_paths[tier] is not None
+
+    def prewarm_models(self, tiers: Optional[List[ModelTier]] = None) -> Dict[ModelTier, float]:
+        """Pre-load models at startup to avoid cold-start delays.
+        
+        Args:
+            tiers: List of tiers to prewarm. If None, prewarm all available local tiers.
+            
+        Returns:
+            Dictionary mapping tier to load time in seconds
+        """
+        if tiers is None:
+            tiers = list(self.params.tier_paths.keys())
+        
+        load_times: Dict[ModelTier, float] = {}
+        
+        for tier in tiers:
+            if not self.is_tier_available_locally(tier):
+                continue
+            
+            if tier in self._model_cache:
+                print(f"Model {tier.value} already loaded, skipping prewarm")
+                continue
+            
+            try:
+                load_start = perf_counter()
+                model_path = self.params.tier_paths[tier]
+                model = self._load_model_cb(tier, model_path)
+                self._model_cache[tier] = model
+                load_time = perf_counter() - load_start
+                load_times[tier] = load_time
+                print(f"✅ Pre-warmed {tier.value} model in {load_time:.3f}s")
+            except Exception as exc:
+                print(f"⚠️ Failed to pre-warm {tier.value} model: {exc}")
+        
+        return load_times
+
+    def _is_cold_start(self, tier: ModelTier) -> bool:
+        """Check if this is the first inference for a tier (cold start)."""
+        return tier not in self._tier_first_inference or not self._tier_first_inference[tier]
 
     def _default_loader(self, tier: ModelTier, model_path: str) -> Any:
         if YOLOv8Inference is None:
@@ -317,15 +362,33 @@ class ModelManager:
         return formatted
 
     def _load_tier(self, tier: ModelTier, frame_index: int) -> None:
+        """Load a model tier, using cache if available to reduce switch overhead."""
         if self._multi_inference is not None:
             self._active_model = None
             self._active_tier = tier
             self._last_switch_frame = frame_index
             return
+        
         model_path = self.params.tier_paths.get(tier)
         if not model_path:
             raise ValueError(f"No model path configured for tier {tier}")
-        self._active_model = self._load_model_cb(tier, model_path)
+        
+        # Track model switch overhead
+        switch_start = perf_counter()
+        
+        # Check cache first to avoid reloading
+        if tier in self._model_cache:
+            self._active_model = self._model_cache[tier]
+            print(f"🔄 Switched to cached {tier.value} model (from cache)")
+        else:
+            # Load model and cache it
+            self._active_model = self._load_model_cb(tier, model_path)
+            self._model_cache[tier] = self._active_model
+            print(f"🔄 Loaded and cached {tier.value} model")
+        
+        switch_overhead = perf_counter() - switch_start
+        self._switch_overhead_s = switch_overhead
+        
         self._active_tier = tier
         self._last_switch_frame = frame_index
 
@@ -417,6 +480,19 @@ class ModelManager:
             metadata["completed_at"] = datetime.utcnow().isoformat()
             timing_block = metadata.setdefault("timing", {})
             timing_block.setdefault("inference_s", inference_latency)
+            
+            # Track cold-start vs warm inference
+            is_cold = self._is_cold_start(active_tier)
+            timing_block["inference_cold_start"] = 1.0 if is_cold else 0.0
+            if is_cold:
+                self._tier_first_inference[active_tier] = True
+                print(f"❄️ Cold start detected for {active_tier.value} model (inference: {inference_latency:.3f}s)")
+            
+            # Track model switch overhead if a switch occurred
+            if switched and self._switch_overhead_s is not None:
+                timing_block["model_switch_overhead_s"] = self._switch_overhead_s
+                print(f"⏱️ Model switch overhead: {self._switch_overhead_s:.3f}s")
+            
             # Add YOLO energy to metadata only for local runs
             if yolo_energy and backend_meta["backend"] == "local":
                 if isinstance(yolo_energy.get("energy_j"), (int, float)):
@@ -465,6 +541,20 @@ class FloodFSM:
         self._llm_last_used: Dict[FloodState, int] = {}
         self._s2_llm_confirmed: bool = False
         self._s2_last_confirm_frame: int = -1
+        
+        # Pre-warm models at startup if enabled (after model_manager is created)
+        if getattr(config, "PREWARM_MODELS", True):
+            self._prewarm_models()
+
+    def _prewarm_models(self) -> None:
+        """Pre-warm models at startup to avoid cold-start delays."""
+        print("\n🔥 Pre-warming models...")
+        load_times = self.model_manager.prewarm_models()
+        if load_times:
+            total_time = sum(load_times.values())
+            print(f"✅ Pre-warmed {len(load_times)} model(s) in {total_time:.3f}s total")
+        else:
+            print("ℹ️ No models to pre-warm (all models may be remote-only)")
 
     def _build_dispatcher(self) -> Optional["InferenceDispatcher"]:
         # Get available local tiers from params (available before model_manager is created)

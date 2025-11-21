@@ -94,6 +94,9 @@ INFERENCE_ROUTING = {
 
 LOCAL_YOLO_TIER = "medium"
 
+# Pre-warm models at startup to avoid cold-start delays
+PREWARM_MODELS = True
+
 # Local LLM Configuration (not used)
 USE_LOCAL_LLM = False
 LOCAL_LLM_BACKEND = "moondream"

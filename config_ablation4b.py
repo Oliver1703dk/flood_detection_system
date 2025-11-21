@@ -95,6 +95,9 @@ INFERENCE_ROUTING = {
 # ABLATION 4b: Platform-specific tier (nano on Pi, small on Jetson)
 LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 
+# Pre-warm models at startup to avoid cold-start delays
+PREWARM_MODELS = True
+
 # Local LLM Configuration (not used)
 USE_LOCAL_LLM = False
 LOCAL_LLM_BACKEND = "moondream"

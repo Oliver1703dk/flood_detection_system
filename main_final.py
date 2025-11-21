@@ -24,6 +24,7 @@ from flood_classifier.classification.strategies import (
     FSMStrategy,
 )
 from flood_classifier.fsm.flood_fsm import FrameDecision, decision_to_dict
+from flood_classifier.utils.queue_monitor import QueueMonitor
 
 # Import your configuration.
 import config
@@ -232,6 +233,10 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         queue_exit_ts = queue_enter_ts + queue_wait_s
         result_timing["processor_queue_enter_ts"] = queue_enter_ts
         result_timing["processor_queue_exit_ts"] = queue_exit_ts
+    
+    # Add queue depth metrics if available (from global queue monitor)
+    # Note: This requires queue_monitor to be accessible, which may need refactoring
+    # For now, we track queue_wait_s which is already captured
     timing_payload = result_timing
     if validation_duration is not None:
         timing_payload["validation_storage_s"] = validation_duration
@@ -397,13 +402,20 @@ def main():
     config.IMAGE_MODE = "MQTT_Final"
 
     latest_messages = LatestPayloadBuffer()
+    queue_monitor = QueueMonitor()
     stop_event = threading.Event()
 
     def custom_on_message(_client, _userdata, msg):
         print(f"Message received on topic: {msg.topic}")
+        entry_ts = queue_monitor.enter()
         superseded = latest_messages.offer(msg.topic, msg.payload)
         if superseded is not None:
             print("Superseded older collector payload; keeping newest frame only.")
+        
+        # Check for queue alerts
+        alert = queue_monitor.check_alert_threshold(threshold_depth=5, threshold_wait_s=0.5)
+        if alert:
+            print(alert)
 
     receiver.on_message = custom_on_message
 
@@ -413,7 +425,15 @@ def main():
             if item is None:
                 continue
             topic, payload, offered_perf, offered_ts = item
-            queue_wait_s = time.perf_counter() - offered_perf if offered_perf is not None else 0.0
+            queue_wait_s = queue_monitor.exit(offered_perf) if offered_perf is not None else 0.0
+            
+            # Log queue stats periodically
+            stats = queue_monitor.get_stats()
+            if stats["total_entries"] % 10 == 0:  # Every 10 messages
+                print(f"📊 Queue stats: depth={stats['current_depth']:.0f}, "
+                      f"avg_wait={stats['avg_wait_s']*1000:.1f}ms, "
+                      f"max_wait={stats['max_wait_s']*1000:.1f}ms")
+            
             try:
                 config.IMAGE_NAME = (
                     "MQTT_Image"
