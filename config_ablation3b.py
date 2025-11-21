@@ -71,6 +71,9 @@ FSM_DEFAULTS = {
 
 FSM_REPEAT_COUNT = 5
 
+# Disable baseline updates during evaluation (too slow - runs every frame)
+ENABLE_BASELINE_UPDATES = False
+
 # MQTT inference settings
 MQTT_INFERENCE_REQUEST_TOPIC = "inference/request"
 MQTT_INFERENCE_RESPONSE_TOPIC = "inference/response"

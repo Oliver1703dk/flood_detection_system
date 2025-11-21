@@ -314,20 +314,28 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         baseline_file="storage/sensor_baselines.json",
         tau=12
     )
-    print("\n🔄 Updating sensor baselines...")
     baseline_start = time.perf_counter()
-    current_baselines = baseline_calculator.update_baselines()
-    baseline_duration = time.perf_counter() - baseline_start
-    timing_payload["baseline_update_s"] = baseline_duration
+    
+    # Check if baseline updates are enabled (disabled during evaluation for performance)
+    if getattr(config, 'ENABLE_BASELINE_UPDATES', True):
+        print("\n🔄 Updating sensor baselines...")
+        current_baselines = baseline_calculator.update_baselines()
+        baseline_duration = time.perf_counter() - baseline_start
+        timing_payload["baseline_update_s"] = baseline_duration
+        
+        if current_baselines:
+            print("✅ Updated Baselines:", current_baselines)
+        else:
+            print("❌ Baseline update failed (no stable period found).")
+    else:
+        # Just read existing baselines (much faster - no file scanning)
+        current_baselines = baseline_calculator.get_baselines()
+        baseline_duration = time.perf_counter() - baseline_start
+        timing_payload["baseline_lookup_s"] = baseline_duration  # Just lookup, not update
     
     # Calculate total pipeline latency including everything
     total_pipeline_latency = time.perf_counter() - start_time
     timing_payload["total_pipeline_latency_s"] = total_pipeline_latency
-    
-    if current_baselines:
-        print("✅ Updated Baselines:", current_baselines)
-    else:
-        print("❌ Baseline update failed (no stable period found).")
     if saved_path:
         try:
             with open(saved_path, "r+", encoding="utf-8") as f:
