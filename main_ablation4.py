@@ -72,7 +72,19 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     """
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
+    
+    Args:
+        message_payload: The MQTT message payload
+        image_name: Optional image name
+        queue_wait_s: Queue wait time in seconds
+        queue_enter_ts: Queue entry timestamp
+        strategy: Classification strategy (uses global _strategy if None)
     """
+    # Use provided strategy or global one
+    active_strategy = strategy or _strategy
+    if active_strategy is None:
+        raise RuntimeError("Classification strategy not initialized. Call initialize_strategy() first.")
+    
     process_start_ts = time.time()
     start_time = time.perf_counter()
     timing_payload = {}
