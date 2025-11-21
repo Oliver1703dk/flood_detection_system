@@ -59,6 +59,50 @@ _LLM_CLASSIFIER: Optional[Any] = None
 _LLM_LOCK = threading.Lock()
 
 
+def _prewarm_yolo_models() -> Dict[str, float]:
+    """Pre-load all available YOLO models at startup to avoid cold-start delays.
+    
+    Returns:
+        Dictionary mapping tier to load time in seconds
+    """
+    _log("🔥 Pre-warming YOLO models...")
+    load_times: Dict[str, float] = {}
+    
+    for tier_value in _TIER_MODEL_PATHS.keys():
+        if tier_value in _YOLO_MODELS:
+            _log(f"Model {tier_value} already loaded, skipping prewarm")
+            continue
+        
+        try:
+            load_start = time.perf_counter()
+            model_filenames = _discover_model_filenames(tier_value)
+            models = []
+            for model_index, filename in enumerate(model_filenames, start=1):
+                model_path = _YOLO_MODEL_ROOT / filename
+                if not model_path.exists():
+                    _log(f"Warning: model file '{model_path}' not found; skipping")
+                    continue
+                models.append(YOLOv8Inference(str(model_path), identifier=str(model_index)))
+            
+            if models:
+                _YOLO_MODELS[tier_value] = models
+                load_time = time.perf_counter() - load_start
+                load_times[tier_value] = load_time
+                _log(f"✅ Pre-warmed {tier_value} model ({len(models)} model(s)) in {load_time:.3f}s")
+            else:
+                _log(f"⚠️ No models found for tier {tier_value}")
+        except Exception as exc:
+            _log(f"⚠️ Failed to pre-warm {tier_value} model: {exc}")
+    
+    if load_times:
+        total_time = sum(load_times.values())
+        _log(f"✅ Pre-warmed {len(load_times)} tier(s) in {total_time:.3f}s total")
+    else:
+        _log("ℹ️ No models to pre-warm")
+    
+    return load_times
+
+
 def _discover_model_filenames(tier_value: str) -> List[str]:
     """Return all checkpoint filenames for the requested tier."""
 
@@ -285,6 +329,10 @@ class JetsonWorker:
         self._job_event = threading.Event()
         self._latest_job: Optional[Dict[str, Any]] = None
         self._job_thread = threading.Thread(target=self._job_loop, name="jetson-job-worker", daemon=True)
+        
+        # Pre-warm YOLO models at startup if enabled
+        if getattr(config, "PREWARM_MODELS", True):
+            _prewarm_yolo_models()
 
     def start(self) -> None:
         _log("Starting Jetson worker threads")

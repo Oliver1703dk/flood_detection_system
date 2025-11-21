@@ -12,6 +12,27 @@ sys.modules['config'] = config
 # Now import the rest (they will use config_ablation2b)
 from main_final import *
 
+def initialize_strategy():
+    """Initialize the classification strategy at startup to trigger pre-warming."""
+    global _strategy
+    if _strategy is not None:
+        return _strategy
+    
+    print("\n🚀 Initializing classification strategy...")
+    strategy_map = {
+        "yolo_sensor": YoloSensorStrategy,
+        "llm_only": LLMOnlyStrategy,
+        "fsm": FSMStrategy,
+    }
+    classification_mode = getattr(config, 'CLASSIFICATION_MODE', 'fsm')
+    strategy_cls = strategy_map.get(classification_mode)
+    if strategy_cls is None:
+        raise ValueError(f"Invalid classification mode: {classification_mode}")
+    
+    _strategy = strategy_cls()
+    print("✅ Strategy initialized (models pre-warmed if applicable)\n")
+    return _strategy
+
 def main():
     """
     Main method for Ablation 2b.
@@ -40,6 +61,9 @@ def main():
     print(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
     print(f"   - ENABLE_BASELINE_UPDATES: {getattr(config, 'ENABLE_BASELINE_UPDATES', True)}")
     print("=" * 60)
+    
+    # Initialize strategy at startup (triggers pre-warming for FSM mode)
+    initialize_strategy()
     
     # Instantiate your MQTTReceiver with the broker configuration.
     receiver = MQTTReceiver(

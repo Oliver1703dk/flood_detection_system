@@ -65,7 +65,10 @@ class LatestPayloadBuffer:
             return item
 
 
-def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0, queue_enter_ts: Optional[float] = None):
+# Global strategy variable to be initialized at startup
+_strategy = None
+
+def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0, queue_enter_ts: Optional[float] = None, strategy=None):
     """
     Process the incoming MQTT message payload and run the full data processing pipeline.
     Expects the payload to be a JSON string containing "image_data", "sensor_data", and "metadata".
@@ -202,17 +205,12 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         "llm_only": LLMOnlyStrategy,
         "fsm": FSMStrategy,
     }
-    strategy_cls = strategy_map.get(classification_mode)
-    if strategy_cls is None:
-        print("Invalid classification mode selected. Exiting processing.")
-        return
-
+    # Use the pre-initialized strategy (created at startup)
     # Debug: Starting classification
     classification_start = time.perf_counter()
     print(f"🧠 [PI] Starting classification (mode: {classification_mode})...")
     
-    strategy = strategy_cls()
-    final_result = strategy.classify(detection_results, message_json)
+    final_result = active_strategy.classify(detection_results, message_json)
     
     # Debug: Classification complete
     classification_time = time.perf_counter() - classification_start
@@ -391,6 +389,27 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     print(printable_result)
 
 
+def initialize_strategy():
+    """Initialize the classification strategy at startup to trigger pre-warming."""
+    global _strategy
+    if _strategy is not None:
+        return _strategy
+    
+    print("\n🚀 Initializing classification strategy...")
+    strategy_map = {
+        "yolo_sensor": YoloSensorStrategy,
+        "llm_only": LLMOnlyStrategy,
+        "fsm": FSMStrategy,
+    }
+    classification_mode = getattr(config, 'CLASSIFICATION_MODE', 'fsm')
+    strategy_cls = strategy_map.get(classification_mode)
+    if strategy_cls is None:
+        raise ValueError(f"Invalid classification mode: {classification_mode}")
+    
+    _strategy = strategy_cls()
+    print("✅ Strategy initialized (models pre-warmed if applicable)\n")
+    return _strategy
+
 def main():
     """
     Main method for the Raspberry Pi.
@@ -412,6 +431,9 @@ def main():
     print(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
     print(f"   - ENABLE_BASELINE_UPDATES: {getattr(config, 'ENABLE_BASELINE_UPDATES', True)}")
     print("=" * 60)
+    
+    # Initialize strategy at startup (triggers pre-warming for FSM mode)
+    initialize_strategy()
     
     # Instantiate your MQTTReceiver with the broker configuration.
     receiver = MQTTReceiver(

@@ -541,6 +541,8 @@ class FloodFSM:
         self._llm_last_used: Dict[FloodState, int] = {}
         self._s2_llm_confirmed: bool = False
         self._s2_last_confirm_frame: int = -1
+        # Track previous frame's classification state (high or ambiguous) for weighted counting
+        self._prev_was_suspicious: bool = False  # True if previous was high or ambiguous
         
         # Pre-warm models at startup if enabled (after model_manager is created)
         if getattr(config, "PREWARM_MODELS", True):
@@ -1174,8 +1176,17 @@ class FloodFSM:
         conflict: bool,
         mid_band: bool,
     ) -> None:
+        # Determine current frame's classification state
+        current_is_high = combined >= self.params.threshold_high
+        current_is_suspicious = current_is_high or ambiguous  # sus, ambiguous, or flood
+        
+        # Handle high counter
         if combined >= self.params.threshold_high:
-            self._counters["high"] += 1
+            # If previous was suspicious (high/ambiguous) and current is also high, count as 2
+            if self._prev_was_suspicious:
+                self._counters["high"] += 2
+            else:
+                self._counters["high"] += 1
         else:
             self._counters["high"] = 0
 
@@ -1184,8 +1195,13 @@ class FloodFSM:
         else:
             self._counters["low"] = 0
 
+        # Handle ambiguous counter
         if ambiguous:
-            self._counters["ambiguous"] += 1
+            # If previous was suspicious (high/ambiguous) and current is also ambiguous, count as 2
+            if self._prev_was_suspicious:
+                self._counters["ambiguous"] += 2
+            else:
+                self._counters["ambiguous"] += 1
         else:
             self._counters["ambiguous"] = 0
 
@@ -1198,6 +1214,9 @@ class FloodFSM:
             self._counters["mid"] += 1
         else:
             self._counters["mid"] = 0
+        
+        # Update previous state for next frame
+        self._prev_was_suspicious = current_is_suspicious
 
     def _is_flapping(self) -> bool:
         if len(self._score_history) < 3:
