@@ -163,16 +163,24 @@ class InferenceDispatcher:
         llm_required: bool = False,
     ) -> bool:
         if self.remote_backend is None:
+            print(f"🔍 [Dispatcher] should_route_remote: remote_backend is None, returning False")
             return False
 
         if llm_required:
+            print(f"🔍 [Dispatcher] should_route_remote: llm_required=True, routing to remote")
             return True
 
         # Route to remote if tier is not available locally
         if requested_tier.value not in self.available_local_tiers:
+            print(f"🔍 [Dispatcher] should_route_remote: tier {requested_tier.value} not in available_local_tiers {self.available_local_tiers}, routing to remote")
             return True
 
-        return self._route_for_state(state) == "remote"
+        route_decision = self._route_for_state(state)
+        should_route = route_decision == "remote"
+        print(f"🔍 [Dispatcher] should_route_remote: state={state.value}, tier={requested_tier.value}, "
+              f"available_local_tiers={self.available_local_tiers}, route_decision={route_decision}, "
+              f"should_route={should_route}")
+        return should_route
 
     def try_remote_yolo(
         self,
@@ -183,10 +191,19 @@ class InferenceDispatcher:
         ctx,
     ) -> Optional[DispatcherResult]:
         if not self.should_route_remote(state=state, requested_tier=requested_tier):
+            print(f"🔍 [Dispatcher] try_remote_yolo: should_route_remote returned False, not routing to remote")
             return None
 
-        if self.remote_backend is None or not self.remote_backend.is_healthy():
+        if self.remote_backend is None:
+            print(f"🔍 [Dispatcher] try_remote_yolo: remote_backend is None, cannot route to remote")
             return None
+        
+        is_healthy = self.remote_backend.is_healthy()
+        if not is_healthy:
+            print(f"🔍 [Dispatcher] try_remote_yolo: remote_backend is not healthy (is_healthy()={is_healthy}), cannot route to remote")
+            return None
+        
+        print(f"🔍 [Dispatcher] try_remote_yolo: Routing to remote - state={state.value}, tier={requested_tier.value}, frame={frame_index}, backend_healthy={is_healthy}")
 
         # Debug: Sending request
         print(f"📤 [PI] Sending YOLO request to Jetson: state={state.value}, tier={requested_tier.value}, frame={frame_index}")

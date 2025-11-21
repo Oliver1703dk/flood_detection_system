@@ -72,19 +72,26 @@ class MQTTInferenceClient:
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
 
+        print(f"🔍 [MQTTBackend] Connecting to broker at {config.MQTT_BROKER_URL}:{config.MQTT_BROKER_PORT}...")
         self._client.connect(config.MQTT_BROKER_URL, config.MQTT_BROKER_PORT)
         self._client.loop_start()
 
         if not self._connected.wait(timeout=5.0):
+            print(f"❌ [MQTTBackend] Failed to connect to broker within 5 seconds")
             raise RuntimeError("MQTTInferenceClient failed to connect to broker")
 
+        print(f"✅ [MQTTBackend] Connected to broker successfully")
         self._client.subscribe(f"{self.response_topic}/#", qos=self.qos)
         self._client.subscribe(self.heartbeat_topic, qos=0)
+        print(f"🔍 [MQTTBackend] Subscribed to response topic '{self.response_topic}/#' and heartbeat topic '{self.heartbeat_topic}'")
 
     # ------------------------------------------------------------------
     def _on_connect(self, _client, _userdata, _flags, rc):
         if rc == 0:
+            print(f"✅ [MQTTBackend] MQTT connection established (rc={rc})")
             self._connected.set()
+        else:
+            print(f"❌ [MQTTBackend] MQTT connection failed (rc={rc})")
 
     # ------------------------------------------------------------------
     def _on_disconnect(self, _client, _userdata, _rc):
@@ -95,6 +102,7 @@ class MQTTInferenceClient:
         topic = msg.topic
         if topic == self.heartbeat_topic:
             self._last_heartbeat = time.time()
+            print(f"💓 [MQTTBackend] Received heartbeat from Jetson at {time.strftime('%H:%M:%S')}")
             return
 
         if not topic.startswith(self.response_topic):
@@ -189,11 +197,17 @@ class MQTTInferenceClient:
 
     # ------------------------------------------------------------------
     def is_healthy(self, heartbeat_timeout: float = 10.0) -> bool:
-        if not self._connected.is_set():
-            return False
-        if self._last_heartbeat == 0.0:
-            return False
-        return (time.time() - self._last_heartbeat) <= heartbeat_timeout
+        connected = self._connected.is_set()
+        last_heartbeat = self._last_heartbeat
+        time_since_heartbeat = time.time() - last_heartbeat if last_heartbeat > 0.0 else float('inf')
+        is_healthy_result = connected and last_heartbeat > 0.0 and time_since_heartbeat <= heartbeat_timeout
+        
+        if not is_healthy_result:
+            print(f"🔍 [MQTTBackend] is_healthy: connected={connected}, last_heartbeat={last_heartbeat}, "
+                  f"time_since_heartbeat={time_since_heartbeat:.2f}s, timeout={heartbeat_timeout}s, "
+                  f"healthy={is_healthy_result}")
+        
+        return is_healthy_result
 
     # ------------------------------------------------------------------
     def close(self) -> None:

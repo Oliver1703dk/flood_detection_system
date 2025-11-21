@@ -402,6 +402,7 @@ class ModelManager:
         backend_meta: Dict[str, Any] = {"backend": "local", "metadata": {}}
 
         if self._dispatcher is not None:
+            print(f"🔍 [ModelManager] infer: Attempting remote inference - state={fsm_state.value}, tier={requested_tier.value}, frame={frame_index}")
             try:
                 remote_result = self._dispatcher.try_remote_yolo(
                     state=fsm_state,
@@ -409,6 +410,10 @@ class ModelManager:
                     frame_index=frame_index,
                     ctx=ctx,
                 )
+                if remote_result is not None:
+                    print(f"✅ [ModelManager] infer: Remote inference successful - backend={remote_result.backend}")
+                else:
+                    print(f"🔍 [ModelManager] infer: Remote inference returned None (not routed or failed)")
             except Exception as exc:
                 # Check if tier is available locally before falling back
                 if not self.is_tier_available_locally(requested_tier):
@@ -561,18 +566,29 @@ class FloodFSM:
     def _build_dispatcher(self) -> Optional["InferenceDispatcher"]:
         # Get available local tiers from params (available before model_manager is created)
         available_tiers = {tier.value for tier in self.params.tier_paths.keys()}
+        print(f"🔍 [FSM] _build_dispatcher: available_local_tiers={available_tiers}")
         
         if InferenceDispatcher is None or MQTTJetsonBackend is None:
+            print(f"🔍 [FSM] _build_dispatcher: InferenceDispatcher or MQTTJetsonBackend is None, returning None")
             return None
         try:
+            print(f"🔍 [FSM] _build_dispatcher: Attempting to create MQTTJetsonBackend...")
             remote_backend = MQTTJetsonBackend()
+            print(f"🔍 [FSM] _build_dispatcher: MQTTJetsonBackend created successfully")
+            # Check initial health
+            initial_health = remote_backend.is_healthy()
+            print(f"🔍 [FSM] _build_dispatcher: Initial backend health check: {initial_health}")
         except Exception as exc:
-            print(f"Remote inference disabled ({exc}). Running local-only mode.")
+            print(f"⚠️ [FSM] Remote inference disabled ({exc}). Running local-only mode.")
+            import traceback
+            traceback.print_exc()
             return None
-        return InferenceDispatcher(
+        dispatcher = InferenceDispatcher(
             remote_backend=remote_backend,
             available_local_tiers=available_tiers
         )
+        print(f"🔍 [FSM] _build_dispatcher: InferenceDispatcher created with routing={dispatcher.routing}")
+        return dispatcher
 
     def next_state(self, ctx: FrameContext) -> FrameDecision:
         fsm_timing: Dict[str, float] = {}
@@ -778,6 +794,14 @@ class FloodFSM:
             flapping=flapping,
         )
         fsm_timing["fsm_state_evaluation_s"] = perf_counter() - determine_start
+        
+        # Debug: State transition
+        if next_state != self.state:
+            print(f"🔄 [FSM] State transition: {self.state.value} → {next_state.value} (frame {self._frame_index}, "
+                  f"counters={self._counters}, combined_score={combined:.3f})")
+        else:
+            print(f"🔍 [FSM] State unchanged: {self.state.value} (frame {self._frame_index}, "
+                  f"counters={self._counters}, combined_score={combined:.3f})")
 
         enforce_start = perf_counter()
         (
