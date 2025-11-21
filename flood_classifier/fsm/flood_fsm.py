@@ -257,6 +257,21 @@ class ModelManager:
     def active_tier(self) -> Optional[ModelTier]:
         return self._active_tier
 
+    def is_tier_available_locally(self, tier: ModelTier) -> bool:
+        """Check if a model tier can be loaded locally.
+        
+        Returns True if the tier has a configured path in tier_paths.
+        This allows the system to determine if a fallback to local inference
+        is possible when remote inference fails.
+        
+        Args:
+            tier: The ModelTier to check availability for
+            
+        Returns:
+            True if the tier is configured for local execution, False otherwise
+        """
+        return tier in self.params.tier_paths and self.params.tier_paths[tier] is not None
+
     def _default_loader(self, tier: ModelTier, model_path: str) -> Any:
         if YOLOv8Inference is None:
             raise RuntimeError("YOLOv8Inference unavailable; provide custom load_model callback")
@@ -332,7 +347,16 @@ class ModelManager:
                     ctx=ctx,
                 )
             except Exception as exc:
-                print(f"Remote inference request failed ({exc}); falling back to local model.")
+                # Check if tier is available locally before falling back
+                if not self.is_tier_available_locally(requested_tier):
+                    error_msg = (
+                        f"Cannot run {requested_tier.value} model: remote backend unavailable "
+                        f"and tier not configured for local execution. Error: {exc}"
+                    )
+                    print(f"⚠️ ERROR: {error_msg}")
+                    raise RuntimeError(error_msg) from exc
+                
+                print(f"⚠️ WARNING: Remote inference failed ({exc}); falling back to local {requested_tier.value} model.")
                 remote_result = None
 
             if remote_result is not None:
@@ -443,6 +467,9 @@ class FloodFSM:
         self._s2_last_confirm_frame: int = -1
 
     def _build_dispatcher(self) -> Optional["InferenceDispatcher"]:
+        # Get available local tiers from params (available before model_manager is created)
+        available_tiers = {tier.value for tier in self.params.tier_paths.keys()}
+        
         if InferenceDispatcher is None or MQTTJetsonBackend is None:
             return None
         try:
@@ -450,7 +477,10 @@ class FloodFSM:
         except Exception as exc:
             print(f"Remote inference disabled ({exc}). Running local-only mode.")
             return None
-        return InferenceDispatcher(remote_backend=remote_backend)
+        return InferenceDispatcher(
+            remote_backend=remote_backend,
+            available_local_tiers=available_tiers
+        )
 
     def next_state(self, ctx: FrameContext) -> FrameDecision:
         fsm_timing: Dict[str, float] = {}

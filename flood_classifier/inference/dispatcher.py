@@ -143,10 +143,14 @@ class InferenceDispatcher:
         remote_backend: Optional[MQTTJetsonBackend] = None,
         routing: Optional[Dict[str, str]] = None,
         local_tier: str = config.LOCAL_YOLO_TIER,
+        available_local_tiers: Optional[set] = None,
     ) -> None:
         self.remote_backend = remote_backend
         self.routing = routing or config.INFERENCE_ROUTING
         self.local_tier = local_tier
+        # Set of tier values (strings) that are available locally
+        # Defaults to just the local_tier if not provided
+        self.available_local_tiers = available_local_tiers or {local_tier}
 
     def _route_for_state(self, state: "FloodState") -> str:
         return self.routing.get(state.value, self.routing.get("default", "local"))
@@ -164,7 +168,8 @@ class InferenceDispatcher:
         if llm_required:
             return True
 
-        if requested_tier.value != self.local_tier:
+        # Route to remote if tier is not available locally
+        if requested_tier.value not in self.available_local_tiers:
             return True
 
         return self._route_for_state(state) == "remote"
