@@ -92,15 +92,26 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     if tier_value not in _TIER_MODEL_PATHS:
         raise ValueError(f"Unsupported tier '{tier_value}' in request")
 
+    # Debug: Start YOLO inference
+    _log(f"🔍 [JETSON] YOLO inference: tier={tier_value}, image_size={len(image_b64)} bytes")
+
     sensor_data = payload.get("sensor_data") or payload.get("metadata", {}).get("sensor_data")
     sensor_baseline = payload.get("sensor_baseline") or payload.get("metadata", {}).get("sensor_baseline")
     metadata = payload.get("metadata") or {}
 
     metrics = payload.setdefault("_timing", {})
     preprocess_start = time.perf_counter()
+    
+    # Debug: Preprocessing
+    _log(f"📸 [JETSON] Preprocessing image...")
+    
     # Pass timing_dict to image processor to collect detailed timing
     image = _IMAGE_PROCESSOR.preprocess(image_b64, timing_dict=metrics)
     metrics["preprocess_s"] = time.perf_counter() - preprocess_start
+    
+    # Debug: Preprocessing complete
+    _log(f"⏱️  [JETSON] Preprocessing took {metrics['preprocess_s']*1000:.1f}ms")
+    
     if image is None:
         raise ValueError("Failed to decode image for YOLO inference")
 
@@ -109,6 +120,9 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
     power_monitor = get_power_monitor()
     job_id = f"yolo_{tier_value}_{int(time.time() * 1000)}"
     power_monitor.start_sampling(job_id)
+    
+    # Debug: Starting inference
+    _log(f"🤖 [JETSON] Starting YOLO inference (tier={tier_value})...")
     
     with _YOLO_LOCK:
         models = _YOLO_MODELS.get(tier_value)
@@ -127,15 +141,30 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
             _YOLO_MODELS[tier_value] = models
             _log(f"Loaded {len(models)} YOLO model(s) for tier '{tier_value}'")
 
+        # Debug: Model count
+        model_count = len(models)
+        _log(f"🔄 [JETSON] Running {model_count} model(s)...")
+
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_by_model = {}
         for idx, model in enumerate(models, start=1):
+            # Debug: Individual model inference
+            model_start = time.perf_counter()
+            _log(f"  → Model {idx}/{model_count} inference...")
+            
             results_by_model[idx] = model.run_inference(
                 image,
                 run_id=run_id,
                 metadata=metadata,
             )
+            
+            # Debug: Model complete
+            model_time = time.perf_counter() - model_start
+            _log(f"  ✓ Model {idx} completed in {model_time*1000:.1f}ms")
 
+        # Debug: Aggregation
+        _log(f"🔀 [JETSON] Aggregating {model_count} model results...")
+        
         results = _YOLO_AGGREGATOR.classify(results_by_model)
         _YOLO_AGGREGATOR.draw_aggregated_bounding_boxes(
             image,
@@ -164,7 +193,9 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         if tier_value not in model_ids:
             model_ids.append(tier_value)
 
+    # Debug: Inference complete
     image_name = payload.get("metadata", {}).get("image_name", "unknown")
+    _log(f"✅ [JETSON] YOLO inference complete: {metrics['inference_s']*1000:.1f}ms, {len(formatted)} detections")
     _log(f"YOLO inference complete for image '{image_name}'; {len(formatted)} detection(s) produced")
     return {
         "detections": formatted,
@@ -368,6 +399,15 @@ class JetsonWorker:
         job_id = payload.get("id")
         task = payload.get("task")
 
+        # Debug: Network latency
+        receive_time = time.time()
+        sent_ts = payload.get("ts") or payload.get("_timing", {}).get("sent_ts")
+        if sent_ts:
+            network_latency = receive_time - sent_ts
+            _log(f"📥 [JETSON] Received {task} job {job_id[:8] if job_id else 'unknown'}... (network: {network_latency*1000:.1f}ms)")
+        else:
+            _log(f"📥 [JETSON] Received {task} job {job_id[:8] if job_id else 'unknown'}... (network: N/A)")
+
         _log(f"Processing task '{task}' (job id: {job_id})")
         metrics = payload.setdefault("_timing", {})
         
@@ -377,6 +417,10 @@ class JetsonWorker:
         
         metrics["process_start_ts"] = time.time()
         process_start_perf = time.perf_counter()
+        
+        # Debug: Start processing
+        _log(f"⏱️  [JETSON] Starting {task} processing...")
+        
         response: Dict[str, Any] = {"id": job_id, "error": None}
         try:
             if task == "yolo":
@@ -392,6 +436,13 @@ class JetsonWorker:
 
         metrics["compute_s"] = time.perf_counter() - process_start_perf
         metrics["process_end_ts"] = time.time()
+        total_runtime = metrics.get("compute_s", 0.0)
+        if "queue_wait_s" in metrics:
+            total_runtime += metrics["queue_wait_s"]
+        metrics["total_runtime_s"] = total_runtime
+        
+        # Debug: Completion
+        _log(f"✅ [JETSON] Completed {task} in {metrics['compute_s']*1000:.1f}ms (total: {total_runtime*1000:.1f}ms)")
         total_runtime = metrics.get("compute_s", 0.0)
         if "queue_wait_s" in metrics:
             total_runtime += metrics["queue_wait_s"]
@@ -468,6 +519,15 @@ class JetsonWorker:
 
 def main() -> None:
     _log("Launching Jetson inference worker")
+    
+    # Debug: Print config file being used
+    config_file = getattr(config, '__file__', 'unknown')
+    _log(f"📋 [JETSON] Using config file: {config_file}")
+    _log(f"📋 [JETSON] Config settings:")
+    _log(f"   - LOCAL_YOLO_TIER: {getattr(config, 'LOCAL_YOLO_TIER', 'unknown')}")
+    _log(f"   - USE_LLM_CONFIRMATION: {getattr(config, 'USE_LLM_CONFIRMATION', False)}")
+    _log(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
+    
     # Only preload LLM if USE_LLM_CONFIRMATION is enabled
     preload_llm = getattr(config, "USE_LLM_CONFIRMATION", False)
     worker = JetsonWorker(preload_llm=preload_llm)

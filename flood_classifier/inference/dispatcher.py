@@ -183,6 +183,10 @@ class InferenceDispatcher:
         if self.remote_backend is None or not self.remote_backend.is_healthy():
             return None
 
+        # Debug: Sending request
+        print(f"📤 [PI] Sending YOLO request to Jetson: state={state.value}, tier={requested_tier.value}, frame={frame_index}")
+        send_start = perf_counter()
+
         # Create timing dictionary to collect all timing metrics
         timing_dict: Dict[str, float] = {}
 
@@ -202,6 +206,10 @@ class InferenceDispatcher:
             image_bytes_duration = perf_counter() - image_bytes_start
             timing_dict["image_bytes_retrieve_s"] = image_bytes_duration
 
+        # Debug: Image encoding
+        encode_time = perf_counter() - send_start
+        print(f"📦 [PI] Image encoded in {encode_time*1000:.1f}ms, size={len(image_b64)} bytes")
+
         metadata = {
             "timestamp": ctx.metadata.get("timestamp"),
             "camera_id": ctx.metadata.get("camera_id"),
@@ -210,6 +218,10 @@ class InferenceDispatcher:
             "sensor_data": ctx.sensor_data,
             "sensor_baseline": ctx.metadata.get("sensor_baseline"),
         }
+
+        # Debug: Publishing request
+        print(f"🚀 [PI] Publishing MQTT request to Jetson...")
+        request_start = perf_counter()
 
         result = self.remote_backend.run_yolo(
             image_b64=image_b64,
@@ -221,6 +233,14 @@ class InferenceDispatcher:
             sensor_baseline=ctx.metadata.get("sensor_baseline"),
             timing_dict=timing_dict,
         )
+        
+        # Debug: Response received
+        total_time = perf_counter() - request_start
+        latency = result.get("latency_s", 0)
+        compute_time = result.get("timing", {}).get("compute_s", 0)
+        network_time = timing_dict.get("network_pi_to_jetson_s", 0)
+        print(f"📥 [PI] Received Jetson response in {total_time*1000:.1f}ms")
+        print(f"   Breakdown: network={network_time*1000:.1f}ms, compute={compute_time*1000:.1f}ms, total_latency={latency*1000:.1f}ms")
         
         # Merge timing from result
         result_timing = result.get("timing", {})

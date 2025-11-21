@@ -85,6 +85,8 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         original_metadata = deepcopy(message_json.get("metadata", {}) or {})
         metadata = message_json.setdefault("metadata", {})
         print("\n--- Received MQTT Message ---")
+        # Debug: Frame processing started
+        print(f"⏱️  [PI] Frame processing started (JSON parse: {json_parse_duration*1000:.1f}ms)")
         # Optionally print the formatted JSON:
         # print(json.dumps(message_json, indent=4))
     except Exception as e:
@@ -204,8 +206,16 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         print("Invalid classification mode selected. Exiting processing.")
         return
 
+    # Debug: Starting classification
+    classification_start = time.perf_counter()
+    print(f"🧠 [PI] Starting classification (mode: {classification_mode})...")
+    
     strategy = strategy_cls()
     final_result = strategy.classify(detection_results, message_json)
+    
+    # Debug: Classification complete
+    classification_time = time.perf_counter() - classification_start
+    print(f"✅ [PI] Classification complete in {classification_time*1000:.1f}ms")
 
     if isinstance(final_result, FrameDecision):
         printable_result = decision_to_dict(final_result)
@@ -330,15 +340,31 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         current_baselines = baseline_calculator.update_baselines()
         baseline_duration = time.perf_counter() - baseline_start
         timing_payload["baseline_update_s"] = baseline_duration
+        
+        # Debug: Baseline update timing
+        print(f"⏱️  [PI] Baseline update took {baseline_duration*1000:.1f}ms")
     else:
         # Just read existing baselines (much faster - no file scanning)
         current_baselines = baseline_calculator.get_baselines()
         baseline_duration = time.perf_counter() - baseline_start
         timing_payload["baseline_lookup_s"] = baseline_duration  # Just lookup, not update
+        
+        # Debug: Baseline lookup timing
+        print(f"⏱️  [PI] Baseline lookup took {baseline_duration*1000:.1f}ms")
     
     # Calculate total pipeline latency including everything
     total_pipeline_latency = time.perf_counter() - start_time
     timing_payload["total_pipeline_latency_s"] = total_pipeline_latency
+    
+    # Debug: Total frame processing time
+    fsm_time = timing_payload.get('fsm_classification_core_s', 0)
+    if fsm_time == 0 and 'classification_time' in locals():
+        fsm_time = classification_time
+    print(f"🎯 [PI] Total frame processing: {total_pipeline_latency*1000:.1f}ms")
+    print(f"   Breakdown: json={timing_payload.get('json_parse_s', 0)*1000:.1f}ms, "
+          f"validation={timing_payload.get('validation_storage_s', 0)*1000:.1f}ms, "
+          f"classification={fsm_time*1000:.1f}ms, "
+          f"baseline={baseline_duration*1000:.1f}ms")
     
     if getattr(config, 'ENABLE_BASELINE_UPDATES', True):
         if current_baselines:
@@ -372,6 +398,18 @@ def main():
     """
     print("=" * 60)
     print("ABLATION 3: Full System Local-Only")
+    print("=" * 60)
+    
+    # Debug: Print config file being used
+    config_file = getattr(config, '__file__', 'unknown')
+    print(f"📋 [PI] Using config file: {config_file}")
+    print(f"📋 [PI] Config settings:")
+    print(f"   - CLASSIFICATION_MODE: {getattr(config, 'CLASSIFICATION_MODE', 'unknown')}")
+    print(f"   - model_size: {getattr(config, 'model_size', 'unknown')}, model_number: {getattr(config, 'model_number', 'unknown')}")
+    print(f"   - DISABLE_SENSOR_FUSION: {getattr(config, 'DISABLE_SENSOR_FUSION', 'unknown')}")
+    print(f"   - INFERENCE_ROUTING: {getattr(config, 'INFERENCE_ROUTING', {})}")
+    print(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
+    print(f"   - ENABLE_BASELINE_UPDATES: {getattr(config, 'ENABLE_BASELINE_UPDATES', True)}")
     print("=" * 60)
     
     # Instantiate your MQTTReceiver with the broker configuration.

@@ -29,6 +29,18 @@ def main():
     print("  ⚠️  Jetson worker required!")
     print("=" * 60)
     
+    # Debug: Print config file being used
+    config_file = getattr(config, '__file__', 'unknown')
+    print(f"📋 [PI] Using config file: {config_file}")
+    print(f"📋 [PI] Config settings:")
+    print(f"   - CLASSIFICATION_MODE: {getattr(config, 'CLASSIFICATION_MODE', 'unknown')}")
+    print(f"   - model_size: {getattr(config, 'model_size', 'unknown')}, model_number: {getattr(config, 'model_number', 'unknown')}")
+    print(f"   - DISABLE_SENSOR_FUSION: {getattr(config, 'DISABLE_SENSOR_FUSION', 'unknown')}")
+    print(f"   - INFERENCE_ROUTING: {getattr(config, 'INFERENCE_ROUTING', {})}")
+    print(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
+    print(f"   - ENABLE_BASELINE_UPDATES: {getattr(config, 'ENABLE_BASELINE_UPDATES', True)}")
+    print("=" * 60)
+    
     # Instantiate your MQTTReceiver with the broker configuration.
     receiver = MQTTReceiver(
         broker_url=config.MQTT_BROKER_URL,

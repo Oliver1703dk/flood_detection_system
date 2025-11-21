@@ -77,6 +77,8 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         original_metadata = deepcopy(message_json.get("metadata", {}) or {})
         metadata = message_json.setdefault("metadata", {})
         print("\n--- Received MQTT Message ---")
+        # Debug: Frame processing started
+        print(f"⏱️  [PI] Frame processing started (JSON parse: {json_parse_duration*1000:.1f}ms)")
         # Optionally print the formatted JSON:
         # print(json.dumps(message_json, indent=4))
     except Exception as e:
@@ -196,8 +198,16 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         print("Invalid classification mode selected. Exiting processing.")
         return
 
+    # Debug: Starting classification
+    classification_start = time.perf_counter()
+    print(f"🧠 [PI] Starting classification (mode: {classification_mode})...")
+    
     strategy = strategy_cls()
     final_result = strategy.classify(detection_results, message_json)
+    
+    # Debug: Classification complete
+    classification_time = time.perf_counter() - classification_start
+    print(f"✅ [PI] Classification complete in {classification_time*1000:.1f}ms")
 
     if isinstance(final_result, FrameDecision):
         printable_result = decision_to_dict(final_result)
@@ -323,6 +333,9 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         baseline_duration = time.perf_counter() - baseline_start
         timing_payload["baseline_update_s"] = baseline_duration
         
+        # Debug: Baseline update timing
+        print(f"⏱️  [PI] Baseline update took {baseline_duration*1000:.1f}ms")
+        
         if current_baselines:
             print("✅ Updated Baselines:", current_baselines)
         else:
@@ -332,10 +345,23 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         current_baselines = baseline_calculator.get_baselines()
         baseline_duration = time.perf_counter() - baseline_start
         timing_payload["baseline_lookup_s"] = baseline_duration  # Just lookup, not update
+        
+        # Debug: Baseline lookup timing
+        print(f"⏱️  [PI] Baseline lookup took {baseline_duration*1000:.1f}ms")
     
     # Calculate total pipeline latency including everything
     total_pipeline_latency = time.perf_counter() - start_time
     timing_payload["total_pipeline_latency_s"] = total_pipeline_latency
+    
+    # Debug: Total frame processing time
+    fsm_time = timing_payload.get('fsm_classification_core_s', 0)
+    if fsm_time == 0 and 'classification_time' in locals():
+        fsm_time = classification_time
+    print(f"🎯 [PI] Total frame processing: {total_pipeline_latency*1000:.1f}ms")
+    print(f"   Breakdown: json={timing_payload.get('json_parse_s', 0)*1000:.1f}ms, "
+          f"validation={timing_payload.get('validation_storage_s', 0)*1000:.1f}ms, "
+          f"classification={fsm_time*1000:.1f}ms, "
+          f"baseline={baseline_duration*1000:.1f}ms")
     if saved_path:
         try:
             with open(saved_path, "r+", encoding="utf-8") as f:
