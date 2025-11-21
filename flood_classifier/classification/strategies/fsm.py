@@ -43,6 +43,10 @@ class FSMStrategy(ClassificationStrategy):
     """Classification strategy backed by :class:`FloodFSM`."""
 
     def __init__(self, fsm: Optional[FloodFSM] = None, vision_only: bool = False) -> None:
+        # Read DISABLE_SENSOR_FUSION from config if vision_only not explicitly set
+        import config
+        if not vision_only and hasattr(config, 'DISABLE_SENSOR_FUSION'):
+            vision_only = bool(getattr(config, 'DISABLE_SENSOR_FUSION', False))
         self._fsm = fsm if fsm is not None else _get_default_fsm(vision_only=vision_only)
 
     def classify(self, detection_results, message):  # type: ignore[override]
