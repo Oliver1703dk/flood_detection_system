@@ -232,7 +232,9 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
 
     # Save results.
     save_start = time.perf_counter()
-    saver = DataResultsSaver()
+    storage_dir = getattr(config, 'RESULTS_STORAGE_DIR', 'storage/data_results')
+    video_storage_dir = getattr(config, 'RESULTS_VIDEO_STORAGE_DIR', 'storage/video_results')
+    saver = DataResultsSaver(storage_dir=storage_dir, video_storage_dir=video_storage_dir)
     result_payload = dict(message_json)
     result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
     pipeline_latency = time.perf_counter() - start_time
@@ -333,8 +335,9 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     # -------------------------------------------
     # Update the Baselines Using Latest Data
     # -------------------------------------------
+    storage_dir = getattr(config, 'RESULTS_STORAGE_DIR', 'storage/data_results')
     baseline_calculator = BaselineCalculator(
-        results_dir="storage/data_results",
+        results_dir=storage_dir,
         baseline_file="storage/sensor_baselines.json",
         tau=12
     )

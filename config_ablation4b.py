@@ -98,6 +98,10 @@ LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 # Pre-warm models at startup to avoid cold-start delays
 PREWARM_MODELS = True
 
+# Storage directories for results (separate per ablation)
+RESULTS_STORAGE_DIR = "storage/data_results/ablation4b"
+RESULTS_VIDEO_STORAGE_DIR = "storage/video_results/ablation4b"
+
 # Local LLM Configuration (not used)
 USE_LOCAL_LLM = False
 LOCAL_LLM_BACKEND = "moondream"
