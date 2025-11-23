@@ -212,6 +212,11 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
                 preprocessed_image = image_processor.preprocess(message_json["image_data"])
                 preprocess_time = time.perf_counter() - preprocess_start
                 print("Image preprocessed for inference.")
+                # DELETE base64 data immediately - we have the decoded image now
+                # This frees significant memory (200-500KB per image) early
+                if "image_data" in message_json:
+                    del message_json["image_data"]
+                    gc.collect()  # Force immediate cleanup of base64 string
             except Exception as e:
                 print("Error in image preprocessing:", e)
                 return
@@ -552,21 +557,35 @@ def main():
                       f"max_wait={stats['max_wait_s']*1000:.1f}ms")
                 
                 # Memory monitoring - check memory usage periodically
+                # Monitor BOTH process and system-wide memory to detect OOM conditions
                 try:
                     import psutil
                     import os
                     process = psutil.Process(os.getpid())
-                    mem_mb = process.memory_info().rss / 1024 / 1024
-                    if mem_mb > 1000:  # Alert if over 1GB
-                        print(f"⚠️  HIGH MEMORY: {mem_mb:.0f}MB - forcing garbage collection")
+                    
+                    # Check BOTH process and system memory
+                    process_mem_mb = process.memory_info().rss / 1024 / 1024
+                    system_mem = psutil.virtual_memory()
+                    system_mem_mb = system_mem.total / 1024 / 1024
+                    system_mem_available_mb = system_mem.available / 1024 / 1024
+                    system_mem_percent = system_mem.percent
+                    
+                    # Alert if system memory is low (more critical than process memory)
+                    # This detects OOM conditions that cause system freezes
+                    if system_mem_percent > 85 or system_mem_available_mb < 200:
+                        print(f"🚨 CRITICAL SYSTEM MEMORY: {system_mem_percent:.1f}% used, {system_mem_available_mb:.0f}MB available - forcing aggressive cleanup")
                         gc.collect()
-                    elif stats["total_entries"] % 50 == 0:  # Less frequent memory logging
-                        print(f"💾 Memory usage: {mem_mb:.0f}MB")
+                    elif process_mem_mb > 800:  # Lower threshold for Pi (was 1000MB)
+                        print(f"⚠️  HIGH PROCESS MEMORY: {process_mem_mb:.0f}MB - forcing garbage collection")
+                        gc.collect()
+                    elif stats["total_entries"] % 20 == 0:  # More frequent logging (was every 50)
+                        print(f"💾 Memory: process={process_mem_mb:.0f}MB, system={system_mem_percent:.1f}% ({system_mem_available_mb:.0f}MB free)")
                 except ImportError:
                     # psutil not available, skip memory monitoring
                     pass
                 except Exception as e:
                     # Don't fail if memory monitoring fails
+                    print(f"Memory monitoring error: {e}")
                     pass
             
             try:
