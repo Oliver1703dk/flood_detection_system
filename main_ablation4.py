@@ -21,6 +21,7 @@ import threading
 from typing import Optional, Tuple
 import cv2
 import numpy as np
+import gc
 
 # Import your project modules.
 from cluster_data_receiver.receiver.mqtt_receiver import MQTTReceiver
@@ -67,6 +68,33 @@ class LatestPayloadBuffer:
 
 # Global strategy variable to be initialized at startup
 _strategy = None
+
+# Global processor instances to reuse (avoid creating new instances each message)
+_image_processor = None
+_multi_inference = None
+_result_formatter = None
+
+
+def get_processors():
+    """
+    Get or create global processor instances for image processing.
+    These are reused across all messages to avoid memory overhead.
+    """
+    global _image_processor, _multi_inference, _result_formatter
+    
+    if _image_processor is None:
+        from yolov8_processor.preprocessing.image_processor import ImageProcessor
+        _image_processor = ImageProcessor()
+    
+    if _multi_inference is None:
+        from yolov8_processor.inference.multi_model_inference import MultiModelInference
+        _multi_inference = MultiModelInference()
+    
+    if _result_formatter is None:
+        from yolov8_processor.postprocessing.result_formatter import ResultFormatter
+        _result_formatter = ResultFormatter()
+    
+    return _image_processor, _multi_inference, _result_formatter
 
 def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0, queue_enter_ts: Optional[float] = None, strategy=None):
     """
@@ -170,45 +198,50 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     detection_results = []
     preprocess_time = None
     format_time = None
+    preprocessed_image = None
+    aggregated_results = None
     classification_mode = config.CLASSIFICATION_MODE  # "yolo_sensor" or "llm_only"
-    if classification_mode == "yolo_sensor":
-        from yolov8_processor.preprocessing.image_processor import ImageProcessor
-        from yolov8_processor.inference.multi_model_inference import MultiModelInference
-        from yolov8_processor.postprocessing.result_formatter import ResultFormatter
+    
+    try:
+        if classification_mode == "yolo_sensor":
+            # Reuse global processor instances (memory efficient)
+            image_processor, multi_inference, result_formatter = get_processors()
+            
+            try:
+                preprocess_start = time.perf_counter()
+                preprocessed_image = image_processor.preprocess(message_json["image_data"])
+                preprocess_time = time.perf_counter() - preprocess_start
+                print("Image preprocessed for inference.")
+            except Exception as e:
+                print("Error in image preprocessing:", e)
+                return
 
-        image_processor = ImageProcessor()
-        try:
-            preprocess_start = time.perf_counter()
-            preprocessed_image = image_processor.preprocess(message_json["image_data"])
-            preprocess_time = time.perf_counter() - preprocess_start
-            print("Image preprocessed for inference.")
-        except Exception as e:
-            print("Error in image preprocessing:", e)
-            return
+            try:
+                aggregated_results = multi_inference.run_all_inference(
+                    preprocessed_image,
+                    image_name,
+                    metadata=message_json.get("metadata"),
+                )
+                print("YOLOv8 inference completed.")
+            except Exception as e:
+                print("Error during YOLOv8 inference:", e)
+                aggregated_results = None
 
-        try:
-            multi_inference = MultiModelInference()
-            aggregated_results = multi_inference.run_all_inference(
-                preprocessed_image,
-                image_name,
-                metadata=message_json.get("metadata"),
-            )
-            print("YOLOv8 inference completed.")
-        except Exception as e:
-            print("Error during YOLOv8 inference:", e)
-            aggregated_results = None
-
-        result_formatter = ResultFormatter()
-        if aggregated_results:
-            format_start = time.perf_counter()
-            detection_results = result_formatter.format_results(aggregated_results)
-            format_time = time.perf_counter() - format_start
+            if aggregated_results:
+                format_start = time.perf_counter()
+                detection_results = result_formatter.format_results(aggregated_results)
+                format_time = time.perf_counter() - format_start
+            else:
+                detection_results = []
+            print("\n--- YOLOv8 Detection Results ---")
+            print(detection_results)
         else:
-            detection_results = []
-        print("\n--- YOLOv8 Detection Results ---")
-        print(detection_results)
-    else:
-        print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
+            print("Skipping YOLOv8 inference (LLM-only / FSM mode).")
+    finally:
+        # Explicitly clean up large image objects as early as possible
+        # Note: We can't delete preprocessed_image yet if it's needed for classification
+        # but we'll clean it up after classification
+        pass
     # -------------------------------------------
     # Flood Classification
     # -------------------------------------------
@@ -240,8 +273,14 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     storage_dir = getattr(config, 'RESULTS_STORAGE_DIR', 'storage/data_results')
     video_storage_dir = getattr(config, 'RESULTS_VIDEO_STORAGE_DIR', 'storage/video_results')
     saver = DataResultsSaver(storage_dir=storage_dir, video_storage_dir=video_storage_dir)
-    result_payload = dict(message_json)
-    result_payload["metadata"] = merge_metadata(original_metadata, message_json.get("metadata"))
+    
+    # Create result_payload WITHOUT image_data to save memory
+    # The saver doesn't need image_data, only sensor_data, metadata, and timing
+    result_payload = {
+        "sensor_data": message_json.get("sensor_data", {}),
+        "metadata": merge_metadata(original_metadata, message_json.get("metadata")),
+    }
+    # Don't copy image_data - it's not needed and wastes memory
     pipeline_latency = time.perf_counter() - start_time
     result_timing = result_payload.setdefault("timing", {})
     # Merge timing_payload (which includes json_parse_s) into result_timing
@@ -336,6 +375,26 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
     saved_path = saver.save(result_payload, printable_result)
     save_duration = time.perf_counter() - save_start
     timing_payload["result_save_s"] = save_duration
+
+    # -------------------------------------------
+    # Explicit Memory Cleanup - Clean up large objects immediately
+    # -------------------------------------------
+    # Clean up large image objects now that we're done with them
+    if preprocessed_image is not None:
+        del preprocessed_image
+    if aggregated_results is not None:
+        del aggregated_results
+    # Remove image_data from message_json to free memory
+    if "image_data" in message_json:
+        del message_json["image_data"]
+    # Clean up other large objects
+    if detection_results:
+        del detection_results
+    del result_payload
+    
+    # Force garbage collection periodically to free memory immediately
+    # This helps prevent memory pressure from building up
+    gc.collect()
 
     # -------------------------------------------
     # Update the Baselines Using Latest Data
@@ -491,6 +550,25 @@ def main():
                 print(f"📊 Queue stats: depth={stats['current_depth']:.0f}, "
                       f"avg_wait={stats['avg_wait_s']*1000:.1f}ms, "
                       f"max_wait={stats['max_wait_s']*1000:.1f}ms")
+                
+                # Memory monitoring - check memory usage periodically
+                try:
+                    import psutil
+                    import os
+                    process = psutil.Process(os.getpid())
+                    mem_mb = process.memory_info().rss / 1024 / 1024
+                    if mem_mb > 1000:  # Alert if over 1GB
+                        print(f"⚠️  HIGH MEMORY: {mem_mb:.0f}MB - forcing garbage collection")
+                        gc.collect()
+                    elif stats["total_entries"] % 50 == 0:  # Less frequent memory logging
+                        print(f"💾 Memory usage: {mem_mb:.0f}MB")
+                except ImportError:
+                    # psutil not available, skip memory monitoring
+                    pass
+                except Exception as e:
+                    # Don't fail if memory monitoring fails
+                    pass
+            
             try:
                 config.IMAGE_NAME = (
                     "MQTT_Image"
@@ -499,6 +577,8 @@ def main():
                 )
             except Exception:
                 config.IMAGE_NAME = "MQTT_Image"
+            
+            # Clean up payload reference after processing
             try:
                 process_message(
                     payload,
@@ -508,6 +588,14 @@ def main():
                 )
             except Exception as exc:
                 print(f"Error processing buffered message: {exc}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Clean up payload reference
+                del payload
+                # Periodic garbage collection (every 5 messages)
+                if stats["total_entries"] % 5 == 0:
+                    gc.collect()
 
     worker_thread = threading.Thread(target=worker_loop, name="processor-worker", daemon=True)
     worker_thread.start()
