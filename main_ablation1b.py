@@ -1,7 +1,8 @@
 """
-Main entry point for Ablation 1b: Multi-Model Medium-YOLO Baseline (3x medium)
-- Three medium models with consensus, no FSM, no sensor fusion, no offload
-- Tests multi-model consensus effect vs Ablation 1 (1x medium)
+Main entry point for Ablation 1b: Lightweight Static Baseline (1× nano)
+- Single nano model, no FSM, no sensor fusion, no consensus, no offload
+- Purpose: Reference point for minimum possible resource consumption
+- As per evaluation plan: 1× nano baseline
 """
 
 # Override config module BEFORE any other imports
@@ -41,13 +42,14 @@ def main():
     to the process_message callback for processing.
     """
     print("=" * 60)
-    print("ABLATION 1b: Multi-Model Medium-YOLO Baseline (3x medium)")
+    print("ABLATION 1b: Lightweight Static Baseline (1× nano)")
     print("=" * 60)
     print("Configuration:")
     print("  - Mode: yolo_sensor (no FSM)")
-    print("  - Models: 3x medium with consensus")
+    print("  - Models: 1x nano (single model, no consensus)")
     print("  - Sensor Fusion: Disabled")
     print("  - Remote Offload: Disabled")
+    print("  - Purpose: Minimum resource consumption baseline")
     print("=" * 60)
     
     # Debug: Print config file being used

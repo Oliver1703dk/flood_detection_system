@@ -1,7 +1,8 @@
 # config_ablation1b.py
-# Configuration for Ablation 1b: Multi-Model Medium-YOLO Baseline (3x medium)
-# - Three medium models with consensus, no FSM, no sensor fusion, no offload
-# - Tests multi-model consensus effect vs config_ablation1 (1x medium)
+# Configuration for Ablation 1b: Lightweight Static Baseline (1× nano)
+# - Single nano model, no FSM, no sensor fusion, no consensus, no offload
+# - Purpose: Reference point for minimum possible resource consumption
+# - As per evaluation plan: 1× nano baseline
 
 from pathlib import Path
 from platform_utils import PLATFORM_YOLO_TIER
@@ -25,9 +26,9 @@ DISABLE_SENSOR_FUSION = True
 IMAGE_SIZE = (640, 640)
 IMAGE_NAME = "flood-test-ub3"
 
-# ABLATION 1b: Three medium models with consensus
-model_size = "medium"
-model_number = 3
+# ABLATION 1b: Single nano model (as per evaluation plan: 1× nano)
+model_size = "nano"
+model_number = 1
 
 # Importance weights (not used in yolo_sensor mode, but kept for consistency)
 IMPORTANCE = {
@@ -92,7 +93,7 @@ INFERENCE_ROUTING = {
     "default": "local",
 }
 
-LOCAL_YOLO_TIER = "medium"
+LOCAL_YOLO_TIER = "nano"
 
 # Pre-warm models at startup to avoid cold-start delays
 PREWARM_MODELS = True

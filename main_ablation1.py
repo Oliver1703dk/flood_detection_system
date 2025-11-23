@@ -1,6 +1,7 @@
 """
-Main entry point for Ablation 1: Static Medium-YOLO Only (Baseline)
-- Single medium model, no FSM, no sensor fusion, no offload
+Main entry point for Ablation 1: Static Small-YOLO Only (Baseline)
+- Single small model, no FSM, no sensor fusion, no offload
+- As per evaluation plan: 1× small (strongest realistic single-model baseline)
 """
 
 # Override config module BEFORE any other imports
@@ -486,7 +487,7 @@ def main():
     to the process_message callback for processing.
     """
     print("=" * 60)
-    print("ABLATION 1: Static Medium-YOLO Only (Baseline)")
+    print("ABLATION 1: Static Small-YOLO Only (Baseline)")
     print("=" * 60)
     
     # Debug: Print config file being used

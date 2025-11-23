@@ -1,6 +1,8 @@
 # config_ablation1.py
-# Configuration for Ablation 1: Static Medium-YOLO Only (Baseline)
-# - Single medium model, no FSM, no sensor fusion, no offload
+# Configuration for Ablation 1: Static Small-YOLO Only (Baseline)
+# - Single small model, no FSM, no sensor fusion, no offload
+# Note: Evaluation plan specifies "1× small" as the strongest realistic single-model
+# baseline that runs at 5-7 fps on Raspberry Pi 5
 
 from pathlib import Path
 from platform_utils import PLATFORM_YOLO_TIER
@@ -24,8 +26,8 @@ DISABLE_SENSOR_FUSION = True
 IMAGE_SIZE = (640, 640)
 IMAGE_NAME = "flood-test-ub3"
 
-# ABLATION 1: Single medium model
-model_size = "medium"
+# ABLATION 1: Single small model (as per evaluation plan: 1× small)
+model_size = "small"
 model_number = 1
 
 # Importance weights (not used in yolo_sensor mode, but kept for consistency)
@@ -91,7 +93,7 @@ INFERENCE_ROUTING = {
     "default": "local",
 }
 
-LOCAL_YOLO_TIER = "medium"
+LOCAL_YOLO_TIER = "small"
 
 # Pre-warm models at startup to avoid cold-start delays
 PREWARM_MODELS = True
