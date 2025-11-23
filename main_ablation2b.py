@@ -12,6 +12,9 @@ sys.modules['config'] = config
 # Now import the rest (they will use config_ablation2b)
 from main_final import *
 
+# Initialize global strategy variable
+_strategy = None
+
 def initialize_strategy():
     """Initialize the classification strategy at startup to trigger pre-warming."""
     global _strategy
