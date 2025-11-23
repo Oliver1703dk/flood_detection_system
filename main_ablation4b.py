@@ -10,16 +10,14 @@ import sys
 sys.modules['config'] = config
 
 # Now import the rest (they will use config_ablation4b)
+import main_final
 from main_final import *
-
-# Initialize global strategy variable
-_strategy = None
 
 def initialize_strategy():
     """Initialize the classification strategy at startup to trigger pre-warming."""
-    global _strategy
-    if _strategy is not None:
-        return _strategy
+    # Update the _strategy in main_final module (since process_message uses that)
+    if main_final._strategy is not None:
+        return main_final._strategy
     
     print("\n🚀 Initializing classification strategy...")
     strategy_map = {
@@ -32,9 +30,9 @@ def initialize_strategy():
     if strategy_cls is None:
         raise ValueError(f"Invalid classification mode: {classification_mode}")
     
-    _strategy = strategy_cls()
+    main_final._strategy = strategy_cls()
     print("✅ Strategy initialized (models pre-warmed if applicable)\n")
-    return _strategy
+    return main_final._strategy
 
 def main():
     """
