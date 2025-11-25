@@ -148,6 +148,7 @@ def main():
                 )
             except Exception:
                 config.IMAGE_NAME = "MQTT_Image"
+            # Clean up payload reference after processing
             try:
                 process_message(
                     payload,
@@ -157,6 +158,23 @@ def main():
                 )
             except Exception as exc:
                 print(f"Error processing buffered message: {exc}")
+                import traceback
+                traceback.print_exc()
+            finally:
+                # Clean up payload reference
+                del payload
+                # Garbage collection only when memory is high (not every 5 messages)
+                try:
+                    import psutil
+                    import os
+                    import gc
+                    process = psutil.Process(os.getpid())
+                    process_mem_mb = process.memory_info().rss / 1024 / 1024
+                    if process_mem_mb > 600:  # Only when memory is actually high
+                        gc.collect()
+                except (ImportError, Exception):
+                    # If psutil not available or error, skip GC check
+                    pass
 
     worker_thread = threading.Thread(target=worker_loop, name="processor-worker", daemon=True)
     worker_thread.start()

@@ -612,9 +612,17 @@ def main():
             finally:
                 # Clean up payload reference
                 del payload
-                # Periodic garbage collection (every 5 messages)
-                if stats["total_entries"] % 5 == 0:
-                    gc.collect()
+                # Garbage collection only when memory is high (not every 5 messages)
+                try:
+                    import psutil
+                    import os
+                    process = psutil.Process(os.getpid())
+                    process_mem_mb = process.memory_info().rss / 1024 / 1024
+                    if process_mem_mb > 600:  # Only when memory is actually high
+                        gc.collect()
+                except (ImportError, Exception):
+                    # If psutil not available or error, skip GC check
+                    pass
 
     worker_thread = threading.Thread(target=worker_loop, name="processor-worker", daemon=True)
     worker_thread.start()
