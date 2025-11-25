@@ -104,14 +104,22 @@ class MultiModelInference:
 
     def prewarm_inference(self):
         """
-        Run dummy inference on all loaded models to eliminate cold-start delays.
+        Run dummy inference on loaded models to eliminate cold-start delays.
+        Only prewarms nano and small models (Pi-local models).
+        Medium and large models run on Jetson and don't need Pi prewarming.
         This initializes CUDA/CPU contexts, allocates memory, and warms up the models.
         """
         if not self.models:
             print("⚠️ No models loaded to prewarm")
             return
         
-        print("🔥 Pre-warming inference on all loaded models...")
+        # Only prewarm nano and small models (Pi-local models)
+        model_size = getattr(config, "model_size", "nano").lower()
+        if model_size not in ("nano", "small"):
+            print(f"ℹ️ Skipping prewarm for {model_size} models (only nano/small are prewarmed on Pi)")
+            return
+        
+        print(f"🔥 Pre-warming inference on {model_size} models (Pi-local models only)...")
         image_size = getattr(config, "IMAGE_SIZE", (640, 640))
         dummy_image = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
         print(f"📐 Created dummy image for warmup: {image_size[0]}x{image_size[1]}")
@@ -119,7 +127,7 @@ class MultiModelInference:
         warmup_start = time.perf_counter()
         for model_id, inference_model in self.models.items():
             try:
-                print(f"🔥 Running warmup inference for model {model_id}...")
+                print(f"🔥 Running warmup inference for {model_size} model {model_id}...")
                 # Run dummy inference to trigger full initialization
                 _ = inference_model.model(dummy_image)  # Direct YOLO call
                 print(f"  ✓ Model {model_id} warmup complete")
@@ -127,8 +135,8 @@ class MultiModelInference:
                 print(f"⚠️ Warmup failed for model {model_id}: {warmup_exc}")
         
         warmup_time = time.perf_counter() - warmup_start
-        print(f"✅ Inference warmup complete for {len(self.models)} model(s) in {warmup_time:.3f}s")
-        print("🎯 All models ready - no cold-start delays expected")
+        print(f"✅ Inference warmup complete for {len(self.models)} {model_size} model(s) in {warmup_time:.3f}s")
+        print("🎯 Pi-local models ready - no cold-start delays expected")
 
 
 # Example usage:

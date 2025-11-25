@@ -274,15 +274,19 @@ class ModelManager:
         """Pre-load models at startup to avoid cold-start delays.
         
         Also runs dummy inference to fully initialize models and eliminate cold-start delays.
+        Only prewarms nano and small models by default (Pi-local models).
+        Medium and large models run on Jetson and don't need Pi prewarming.
         
         Args:
-            tiers: List of tiers to prewarm. If None, prewarm all available local tiers.
+            tiers: List of tiers to prewarm. If None, prewarm only nano and small tiers (Pi-local).
             
         Returns:
             Dictionary mapping tier to load time in seconds
         """
         if tiers is None:
-            tiers = list(self.params.tier_paths.keys())
+            # Only prewarm nano and small models (Pi-local models)
+            # Medium and large models run on Jetson and don't need Pi prewarming
+            tiers = [ModelTier.NANO, ModelTier.SMALL]
         
         load_times: Dict[ModelTier, float] = {}
         
