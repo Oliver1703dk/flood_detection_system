@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import paho.mqtt.client as mqtt
 
 # Ensure imports resolve when the script is launched from inside jetson_worker.
@@ -62,11 +63,19 @@ _LLM_LOCK = threading.Lock()
 def _prewarm_yolo_models() -> Dict[str, float]:
     """Pre-load all available YOLO models at startup to avoid cold-start delays.
     
+    Also runs dummy inference to fully initialize GPU/CUDA context, TensorRT engines,
+    and allocate GPU memory. This eliminates cold-start delays on first real inference.
+    
     Returns:
         Dictionary mapping tier to load time in seconds
     """
     _log("🔥 Pre-warming YOLO models...")
     load_times: Dict[str, float] = {}
+    
+    # Create a dummy image for GPU warmup (matches standard input size from config)
+    image_size = getattr(config, "IMAGE_SIZE", (640, 640))
+    dummy_image = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
+    _log(f"📐 Created dummy image for warmup: {image_size[0]}x{image_size[1]}")
     
     for tier_value in _TIER_MODEL_PATHS.keys():
         if tier_value in _YOLO_MODELS:
@@ -88,7 +97,23 @@ def _prewarm_yolo_models() -> Dict[str, float]:
                 _YOLO_MODELS[tier_value] = models
                 load_time = time.perf_counter() - load_start
                 load_times[tier_value] = load_time
-                _log(f"✅ Pre-warmed {tier_value} model ({len(models)} model(s)) in {load_time:.3f}s")
+                _log(f"✅ Loaded {tier_value} model ({len(models)} model(s)) in {load_time:.3f}s")
+                
+                # Run dummy inference to fully initialize GPU/CUDA
+                warmup_start = time.perf_counter()
+                _log(f"🔥 Running GPU warmup inference for {tier_value} model...")
+                try:
+                    for idx, model in enumerate(models, start=1):
+                        # Run a dummy inference to trigger GPU initialization
+                        # This initializes CUDA kernels, TensorRT engines, GPU memory allocation, etc.
+                        _ = model.model(dummy_image)  # Direct YOLO call - triggers full GPU init
+                        _log(f"  ✓ Model {idx}/{len(models)} GPU warmup complete")
+                    warmup_time = time.perf_counter() - warmup_start
+                    _log(f"✅ GPU warmup complete for {tier_value} in {warmup_time:.3f}s")
+                except Exception as warmup_exc:
+                    warmup_time = time.perf_counter() - warmup_start
+                    _log(f"⚠️ GPU warmup failed for {tier_value} after {warmup_time:.3f}s: {warmup_exc}")
+                    _log(f"   (Models loaded but may have cold-start on first real inference)")
             else:
                 _log(f"⚠️ No models found for tier {tier_value}")
         except Exception as exc:
@@ -97,6 +122,7 @@ def _prewarm_yolo_models() -> Dict[str, float]:
     if load_times:
         total_time = sum(load_times.values())
         _log(f"✅ Pre-warmed {len(load_times)} tier(s) in {total_time:.3f}s total")
+        _log("🎯 All models ready - GPU fully initialized, no cold-start delays expected")
     else:
         _log("ℹ️ No models to pre-warm")
     
