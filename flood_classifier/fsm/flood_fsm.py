@@ -1141,14 +1141,8 @@ class FloodFSM:
             base_tier = active if active is not None else ModelTier.NANO
 
         if self.state == FloodState.S5:
-            # When resource constrained, only use nano or small locally on Pi
-            # Default to nano, but use small for critical flood states (S2)
-            if anchor_state == FloodState.S2:
-                # S2 is critical flood detection - use small for better accuracy
-                degraded = ModelTier.SMALL
-            else:
-                # For all other anchor states, use nano to minimize resource usage
-                degraded = ModelTier.NANO
+            # Default to nano when resource constrained
+            degraded = ModelTier.NANO
             
             # Safety cap: ensure we never exceed SMALL when resource constrained
             if tiers.index(degraded) > tiers.index(ModelTier.SMALL):
