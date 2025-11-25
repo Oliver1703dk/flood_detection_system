@@ -13,6 +13,7 @@ from enum import Enum
 from time import perf_counter
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+import numpy as np
 import config
 
 try:  # Import energy tracker
@@ -272,6 +273,8 @@ class ModelManager:
     def prewarm_models(self, tiers: Optional[List[ModelTier]] = None) -> Dict[ModelTier, float]:
         """Pre-load models at startup to avoid cold-start delays.
         
+        Also runs dummy inference to fully initialize models and eliminate cold-start delays.
+        
         Args:
             tiers: List of tiers to prewarm. If None, prewarm all available local tiers.
             
@@ -299,6 +302,25 @@ class ModelManager:
                 load_time = perf_counter() - load_start
                 load_times[tier] = load_time
                 print(f"✅ Pre-warmed {tier.value} model in {load_time:.3f}s")
+                
+                # Run dummy inference to fully initialize the model
+                try:
+                    warmup_start = perf_counter()
+                    image_size = self.params.image_size
+                    dummy_image = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
+                    print(f"🔥 Running warmup inference for {tier.value} model...")
+                    # Direct model call to trigger full initialization
+                    if hasattr(model, 'model'):
+                        _ = model.model(dummy_image)
+                    elif hasattr(model, 'run_inference'):
+                        # For MultiModelInference compatibility
+                        _ = model.run_inference(dummy_image)
+                    warmup_time = perf_counter() - warmup_start
+                    print(f"✅ Warmup inference complete for {tier.value} in {warmup_time:.3f}s")
+                except Exception as warmup_exc:
+                    print(f"⚠️ Warmup inference failed for {tier.value}: {warmup_exc}")
+                    print(f"   (Model loaded but may have cold-start on first real inference)")
+                    
             except Exception as exc:
                 print(f"⚠️ Failed to pre-warm {tier.value} model: {exc}")
         

@@ -90,6 +90,9 @@ def get_processors():
     if _multi_inference is None:
         from yolov8_processor.inference.multi_model_inference import MultiModelInference
         _multi_inference = MultiModelInference()
+        # Prewarm inference to eliminate cold-start delays
+        if getattr(config, "PREWARM_MODELS", True):
+            _multi_inference.prewarm_inference()
     
     if _result_formatter is None:
         from yolov8_processor.postprocessing.result_formatter import ResultFormatter

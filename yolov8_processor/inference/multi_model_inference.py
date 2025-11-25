@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 import cv2
 from datetime import datetime
+import time
+import numpy as np
 import config
 
 # Add project root to path for imports
@@ -99,6 +101,34 @@ class MultiModelInference:
 
         # aggregated_results = final_classifier.classify(results_dict)
         return aggregated_results
+
+    def prewarm_inference(self):
+        """
+        Run dummy inference on all loaded models to eliminate cold-start delays.
+        This initializes CUDA/CPU contexts, allocates memory, and warms up the models.
+        """
+        if not self.models:
+            print("⚠️ No models loaded to prewarm")
+            return
+        
+        print("🔥 Pre-warming inference on all loaded models...")
+        image_size = getattr(config, "IMAGE_SIZE", (640, 640))
+        dummy_image = np.zeros((image_size[0], image_size[1], 3), dtype=np.uint8)
+        print(f"📐 Created dummy image for warmup: {image_size[0]}x{image_size[1]}")
+        
+        warmup_start = time.perf_counter()
+        for model_id, inference_model in self.models.items():
+            try:
+                print(f"🔥 Running warmup inference for model {model_id}...")
+                # Run dummy inference to trigger full initialization
+                _ = inference_model.model(dummy_image)  # Direct YOLO call
+                print(f"  ✓ Model {model_id} warmup complete")
+            except Exception as warmup_exc:
+                print(f"⚠️ Warmup failed for model {model_id}: {warmup_exc}")
+        
+        warmup_time = time.perf_counter() - warmup_start
+        print(f"✅ Inference warmup complete for {len(self.models)} model(s) in {warmup_time:.3f}s")
+        print("🎯 All models ready - no cold-start delays expected")
 
 
 # Example usage:
