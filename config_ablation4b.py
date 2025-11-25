@@ -30,11 +30,6 @@ model_size = "nano"
 model_number = 1
 
 # Importance weights for dynamic model selection
-IMPORTANCE = {
-    "energy": 0.33,
-    "timeliness": 0.33,
-    "accuracy": 0.34,
-}
 
 # MQTT settings for receiving from collector
 MQTT_BROKER_URL = "192.168.20.1"  # Jetson's IP on processor subnet

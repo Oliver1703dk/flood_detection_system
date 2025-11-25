@@ -143,7 +143,7 @@ Example `storage/data_results/<date>/<camera>_<time>.json`:
   - `USE_LLM_CONFIRMATION = False` by default; set to `True` to enable the mandatory/optional LLM flows outlined above.
   - `IMAGE_SIZE = (640, 640)` aligns preprocessing across Pi and Jetson.
   - `LOCAL_YOLO_TIER = "small"` determines the highest tier retained locally.
-  - `IMPORTANCE = {"energy": 0.33, "timeliness": 0.33, "accuracy": 0.34}` biases tier selection.
+  - Model selection is handled by FSM tier selection and `model_size`/`model_number` config settings.
   - `MQTT_TOPIC = "sensor/data"` and inference topics `inference/request`, `inference/response`, `inference/jetson/status` coordinate messaging.
   - `MQTT_INFERENCE_TIMEOUT = 6.0` seconds bounds remote call latency.
   - `USE_LOCAL_LLM = True`, `LOCAL_LLM_MODEL = jetson_worker/llm/models/VILA1.5-3b`, `LOCAL_LLM_USE_4BIT = True`, and `LOCAL_LLM_DEVICE = "cuda"` ensure the Jetson VLM runs locally.

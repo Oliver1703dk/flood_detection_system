@@ -137,15 +137,6 @@ class FSMParams:
     resource_skip_ratio: int = field(
         default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("resource_skip_ratio", 3)
     )  # Process 1 of N frames while constrained
-    accuracy_weight: float = field(
-        default_factory=lambda: getattr(config, "IMPORTANCE", {}).get("accuracy", 0.34)
-    )
-    timeliness_weight: float = field(
-        default_factory=lambda: getattr(config, "IMPORTANCE", {}).get("timeliness", 0.33)
-    )
-    energy_weight: float = field(
-        default_factory=lambda: getattr(config, "IMPORTANCE", {}).get("energy", 0.33)
-    )
     image_size: Tuple[int, int] = field(default_factory=lambda: getattr(config, "IMAGE_SIZE", (640, 640)))
     llm_enabled: bool = field(default_factory=lambda: getattr(config, "USE_LLM_CONFIRMATION", False))
     llm_model: str = "gpt-4.1-mini"
@@ -1012,7 +1003,6 @@ class FloodFSM:
             and self.dispatcher is not None
             and not resource_flag
             and motion != MotionState.FAST
-            and self.params.accuracy_weight > max(self.params.timeliness_weight, self.params.energy_weight)
             and self._llm_last_used.get(FloodState.S2, -1) < self._frame_index - self.params.frames_ambiguous
         ):
             llm_optional_start = perf_counter()
@@ -1128,29 +1118,18 @@ class FloodFSM:
         anchor_state = self._resource_anchor_state if self.state == FloodState.S5 else self.state
         tiers = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.LARGE]
 
-        def accuracy_dominant() -> bool:
-            return self.params.accuracy_weight > max(
-                self.params.timeliness_weight, self.params.energy_weight
-            )
-
         if anchor_state == FloodState.S0:
             base_tier = ModelTier.NANO
         elif anchor_state == FloodState.S1:
             if motion == MotionState.FAST:
                 base_tier = ModelTier.SMALL
             else:
-                base_tier = ModelTier.MEDIUM if accuracy_dominant() else ModelTier.SMALL
+                base_tier = ModelTier.MEDIUM
         elif anchor_state == FloodState.S2:
             if motion == MotionState.FAST:
                 base_tier = ModelTier.SMALL
             else:
-                base_tier = ModelTier.MEDIUM
-                if not resource_flag and accuracy_dominant():
-                    current = self.model_manager.active_tier or ModelTier.MEDIUM
-                    if current == ModelTier.LARGE:
-                        base_tier = ModelTier.LARGE
-                    else:
-                        base_tier = ModelTier.MEDIUM.higher()
+                base_tier = ModelTier.LARGE
         elif anchor_state == FloodState.S3:
             current = self.model_manager.active_tier or ModelTier.MEDIUM
             if tiers.index(current) >= tiers.index(ModelTier.MEDIUM):
@@ -1162,8 +1141,17 @@ class FloodFSM:
             base_tier = active if active is not None else ModelTier.NANO
 
         if self.state == FloodState.S5:
-            degraded = base_tier.lower()
-            if anchor_state == FloodState.S2 and degraded == ModelTier.NANO:
+            # When resource constrained, only use nano or small locally on Pi
+            # Default to nano, but use small for critical flood states (S2)
+            if anchor_state == FloodState.S2:
+                # S2 is critical flood detection - use small for better accuracy
+                degraded = ModelTier.SMALL
+            else:
+                # For all other anchor states, use nano to minimize resource usage
+                degraded = ModelTier.NANO
+            
+            # Safety cap: ensure we never exceed SMALL when resource constrained
+            if tiers.index(degraded) > tiers.index(ModelTier.SMALL):
                 degraded = ModelTier.SMALL
             return degraded
         return base_tier

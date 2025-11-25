@@ -46,6 +46,10 @@ class DummyModelManager:
         self.calls.append(requested_tier)
         return [], self._active_tier, switched, {"backend": "local", "metadata": {}}
 
+    def prewarm_models(self, tiers=None):
+        """No-op prewarm for tests."""
+        return {}
+
 
 class CooldownModelManager(DummyModelManager):
     def __init__(self, cooldown: int):
@@ -264,6 +268,41 @@ def test_resource_state_drops_tier_and_skips_frames():
     assert not resumed.skipped
     assert resumed.state == FloodState.S5
     assert len(model_manager.calls) == calls_after_first + 1
+
+
+def test_resource_constrained_uses_nano_for_non_s2_states():
+    """Verify that resource constrained mode uses NANO for S0, S1, S3 anchor states."""
+    params = FSMParams(frames_high=2, frames_ambiguous=2)
+    # Use low score to stay in S0
+    classifier_s0 = DummyClassifier([
+        {"final_prediction": 0, "combined_score": 0.3, "image_score": 0.25, "sensor_boost": 0.05},
+    ])
+    model_manager = RecordingModelManager()
+    fsm = FloodFSM(params=params, classifier=classifier_s0, model_manager=model_manager, dispatcher=StubDispatcher())
+    
+    # Test S0 -> S5: should use NANO
+    decision_s0 = fsm.next_state(make_context(motion="stop", resource=True))
+    assert decision_s0.state == FloodState.S5
+    assert decision_s0.model_tier == ModelTier.NANO
+    assert decision_s0.tier_requested == ModelTier.NANO
+    
+    # Test S1 -> S5: should use NANO
+    # Use ambiguous scores (between threshold_low 0.35 and threshold_high 0.65) to reach S1
+    classifier_s1 = DummyClassifier([
+        {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
+        {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
+        {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
+    ])
+    model_manager_s1 = RecordingModelManager()
+    fsm_s1 = FloodFSM(params=params, classifier=classifier_s1, model_manager=model_manager_s1, dispatcher=StubDispatcher())
+    # Reach S1 first (need frames_ambiguous=2 ambiguous frames)
+    fsm_s1.next_state(make_context(motion="slow"))
+    fsm_s1.next_state(make_context(motion="slow"))
+    # Now we should be in S1, enter resource constrained mode
+    decision_s1 = fsm_s1.next_state(make_context(motion="slow", resource=True))
+    assert decision_s1.state == FloodState.S5
+    assert decision_s1.model_tier == ModelTier.NANO
+    assert decision_s1.tier_requested == ModelTier.NANO
 
 
 def test_flapping_moves_to_s3_and_detects_drift():

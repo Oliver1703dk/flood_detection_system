@@ -37,44 +37,13 @@ class MultiModelInference:
                 print(f"Warning: {e}. Skipping model {model_id}.")
 
     def _determine_model_params(self):
-        """Decide model size and count from the IMPORTANCE weights."""
-        imp = getattr(config, "IMPORTANCE", {})
-        energy = imp.get("energy", 0.0)
-        timeliness = imp.get("timeliness", 0.0)
-        accuracy = imp.get("accuracy", 1.0 - energy - timeliness)
-
-        # Start from the configured defaults
-        default_size = getattr(config, "model_size", "nano")
-        default_number = getattr(config, "model_number", 3)
-
-        sizes = ["nano", "small", "medium", "large", "xlarge"]
-        size_index = sizes.index(default_size) if default_size in sizes else 0
-
-        # Adjust size mostly based on accuracy. Energy and timeliness only
-        # push the size down when very high.
-        if accuracy > 0.9:
-            size_index = min(size_index + 3, len(sizes) - 1)
-        elif accuracy > 0.7:
-            size_index = min(size_index + 2, len(sizes) - 1)
-        elif accuracy > 0.5:
-            size_index = min(size_index + 1, len(sizes) - 1)
-
-        if energy > 0.7 or timeliness > 0.7:
-            size_index = max(0, size_index - 1)
-
-        model_size = sizes[size_index]
-
-        # Only lower the number of models when timeliness is extremely important
-        model_number = default_number
-        if timeliness >= 0.85:
-            model_number = 1
-        elif timeliness >= 0.7:
-            model_number = 2
-
+        """Use model_size and model_number directly from config."""
+        model_size = getattr(config, "model_size", "nano")
+        model_number = getattr(config, "model_number", 3)
         return model_size, model_number
 
     def reload_from_config(self):
-        """Reload models according to IMPORTANCE settings in config.py."""
+        """Reload models according to model_size and model_number settings in config.py."""
         model_size, model_number = self._determine_model_params()
         model_info = [
             (str(i), f"{model_size}/best{i}.pt")
@@ -83,12 +52,10 @@ class MultiModelInference:
         self.load_models(model_info)
 
     def update_importance(self, importance):
-        """Update IMPORTANCE values and reload models."""
-        total = sum(importance.values())
-        if abs(total - 1.0) > 1e-3:
-            raise ValueError("IMPORTANCE values must sum to 1")
-        config.IMPORTANCE = importance
-        self.reload_from_config()
+        """Deprecated: IMPORTANCE is no longer used. This method does nothing."""
+        # IMPORTANCE-based model selection has been removed.
+        # Models are now determined by model_size and model_number in config.
+        pass
 
     def run_all_inference(self, image, image_name=config.IMAGE_NAME, metadata=None):
         """

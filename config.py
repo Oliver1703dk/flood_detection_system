@@ -24,18 +24,11 @@ IMAGE_SIZE = (640, 640)
 # Image name for testing
 IMAGE_NAME = "flood-test-ub3"
 
-# Default model size and number used on startup. These will be overridden
-# when IMPORTANCE values are used to dynamically select models.
+# Default model size and number used on startup.
 # Supported sizes: nano, small, medium, large, xlarge
 model_size = "nano"
 model_number = 3
 
-# Importance weights used for dynamic model selection. They must sum to 1.
-IMPORTANCE = {
-    "energy": 0.33,
-    "timeliness": 0.33,
-    "accuracy": 0.34,
-}
 
 
 # You can add any other configuration variables you need
