@@ -142,12 +142,21 @@ class FSMParams:
     llm_enabled: bool = field(default_factory=lambda: getattr(config, "USE_LLM_CONFIRMATION", False))
     llm_model: str = "gpt-4.1-mini"
     tier_paths: Dict[ModelTier, str] = field(
-        default_factory=lambda: {
-            ModelTier.NANO: "nano/best1.pt",
-            ModelTier.SMALL: "small/best1.pt",
-            ModelTier.MEDIUM: "medium/best1.pt",
-            ModelTier.LARGE: "large/best1.pt",
-        }
+        default_factory=lambda: (
+            {
+                ModelTier.NANO: "baseline/nano/best1.pt",
+                ModelTier.SMALL: "baseline/small/best1.pt",
+                ModelTier.MEDIUM: "baseline/medium/best1.pt",
+                ModelTier.LARGE: "baseline/large/best1.pt",
+            }
+            if getattr(config, "USE_BASELINE_MODELS", False)
+            else {
+                ModelTier.NANO: "nano/best1.pt",
+                ModelTier.SMALL: "small/best1.pt",
+                ModelTier.MEDIUM: "medium/best1.pt",
+                ModelTier.LARGE: "large/best1.pt",
+            }
+        )
     )
 
 

@@ -30,6 +30,9 @@ IMAGE_NAME = "flood-test-ub3"
 model_size = "small"
 model_number = 1
 
+# Use baseline models (trained on all 3 datasets) for single-model ablations
+USE_BASELINE_MODELS = True
+
 
 # MQTT settings for receiving from collector
 MQTT_BROKER_URL = "192.168.20.1"  # Jetson's IP on processor subnet

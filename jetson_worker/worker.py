@@ -50,8 +50,14 @@ _IMAGE_PROCESSOR = ImageProcessor(target_size=getattr(config, "IMAGE_SIZE", (640
 _RESULT_FORMATTER = ResultFormatter()
 _FSM_PARAMS = FSMParams()
 _TIER_MODEL_PATHS = {tier.value: path for tier, path in _FSM_PARAMS.tier_paths.items()}
+# Handle extra tiers, respecting USE_BASELINE_MODELS setting
+_USE_BASELINE = getattr(config, "USE_BASELINE_MODELS", False)
 for extra_tier in ("large", "xlarge"):
-    _TIER_MODEL_PATHS.setdefault(extra_tier, f"{extra_tier}/best1.pt")
+    if extra_tier not in _TIER_MODEL_PATHS:
+        if _USE_BASELINE:
+            _TIER_MODEL_PATHS[extra_tier] = f"baseline/{extra_tier}/best1.pt"
+        else:
+            _TIER_MODEL_PATHS[extra_tier] = f"{extra_tier}/best1.pt"
 _YOLO_MODEL_ROOT = Path(__file__).resolve().parent.parent / "yolov8_processor" / "model"
 _YOLO_MODELS: Dict[str, List[YOLOv8Inference]] = {}
 _YOLO_LOCK = threading.Lock()

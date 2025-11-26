@@ -47,10 +47,19 @@ class MultiModelInference:
     def reload_from_config(self):
         """Reload models according to model_size and model_number settings in config.py."""
         model_size, model_number = self._determine_model_params()
-        model_info = [
-            (str(i), f"{model_size}/best{i}.pt")
-            for i in range(1, model_number + 1)
-        ]
+        use_baseline = getattr(config, "USE_BASELINE_MODELS", False)
+        
+        # Use baseline models for single-model ablations when USE_BASELINE_MODELS is True
+        if use_baseline and model_number == 1:
+            model_info = [
+                (str(i), f"baseline/{model_size}/best{i}.pt")
+                for i in range(1, model_number + 1)
+            ]
+        else:
+            model_info = [
+                (str(i), f"{model_size}/best{i}.pt")
+                for i in range(1, model_number + 1)
+            ]
         self.load_models(model_info)
 
     def update_importance(self, importance):

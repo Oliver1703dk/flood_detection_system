@@ -30,6 +30,9 @@ IMAGE_NAME = "flood-test-ub3"
 model_size = "nano"
 model_number = 1
 
+# Use baseline models (trained on all 3 datasets) for single-model ablations
+USE_BASELINE_MODELS = True
+
 # Importance weights (not used in yolo_sensor mode, but kept for consistency)
 
 # MQTT settings for receiving from collector
