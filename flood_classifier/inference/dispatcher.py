@@ -18,7 +18,7 @@ from flood_classifier.inference.mqtt_backend import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
-    from flood_classifier.fsm.flood_fsm import FloodState, ModelTier
+    from flood_classifier.fsm.flood_fsm import FloodState, ModelTier, MotionState
 
 
 class RemoteInferenceError(RuntimeError):
@@ -161,10 +161,18 @@ class InferenceDispatcher:
         state: "FloodState",
         requested_tier: "ModelTier",
         llm_required: bool = False,
+        motion: Optional["MotionState"] = None,
     ) -> bool:
         if self.remote_backend is None:
             print(f"🔍 [Dispatcher] should_route_remote: remote_backend is None, returning False")
             return False
+
+        # Check for fast motion offload if enabled
+        if motion is not None:
+            from flood_classifier.fsm.flood_fsm import MotionState
+            if motion == MotionState.FAST and getattr(config, "ALWAYS_OFFLOAD_ON_FAST_MOTION", False):
+                print(f"🔍 [Dispatcher] should_route_remote: motion=FAST and ALWAYS_OFFLOAD_ON_FAST_MOTION=True, routing to remote")
+                return True
 
         if llm_required:
             print(f"🔍 [Dispatcher] should_route_remote: llm_required=True, routing to remote")
@@ -189,8 +197,13 @@ class InferenceDispatcher:
         requested_tier: "ModelTier",
         frame_index: int,
         ctx,
+        motion: Optional["MotionState"] = None,
     ) -> Optional[DispatcherResult]:
-        if not self.should_route_remote(state=state, requested_tier=requested_tier):
+        # Extract motion from ctx if not provided and ctx has get_motion_state method
+        if motion is None and hasattr(ctx, "get_motion_state"):
+            motion = ctx.get_motion_state()
+        
+        if not self.should_route_remote(state=state, requested_tier=requested_tier, motion=motion):
             print(f"🔍 [Dispatcher] try_remote_yolo: should_route_remote returned False, not routing to remote")
             return None
 

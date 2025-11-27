@@ -90,6 +90,10 @@ INFERENCE_ROUTING = {
     "default": "local",
 }
 
+# When True, all YOLO inference tasks are offloaded to Jetson when motion is FAST,
+# regardless of tier or FSM state. This only affects routing decisions, not tier selection.
+ALWAYS_OFFLOAD_ON_FAST_MOTION = False
+
 # ABLATION 3b: Platform-specific tier (nano on Pi, small on Jetson)
 LOCAL_YOLO_TIER = PLATFORM_YOLO_TIER
 

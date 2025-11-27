@@ -424,6 +424,7 @@ class ModelManager:
         requested_tier: ModelTier,
         frame_index: int,
         fsm_state: "FloodState",
+        motion: Optional[MotionState] = None,
     ) -> Tuple[List[Dict[str, Any]], ModelTier, bool, Dict[str, Any]]:
         backend_meta: Dict[str, Any] = {"backend": "local", "metadata": {}}
 
@@ -435,6 +436,7 @@ class ModelManager:
                     requested_tier=requested_tier,
                     frame_index=frame_index,
                     ctx=ctx,
+                    motion=motion,
                 )
                 if remote_result is not None:
                     print(f"✅ [ModelManager] infer: Remote inference successful - backend={remote_result.backend}")
@@ -685,6 +687,7 @@ class FloodFSM:
             requested_tier,
             self._frame_index,
             prev_state,
+            motion=motion,
         )
         fsm_timing["fsm_infer_dispatch_s"] = perf_counter() - infer_dispatch_start
         if switched:
