@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the expanded 8-configuration ablation study designed to systematically evaluate each component of the flood detection system.
+This document describes the expanded 10-configuration ablation study designed to systematically evaluate each component of the flood detection system.
 
 ## Configuration Matrix
 
@@ -14,8 +14,12 @@ This document describes the expanded 8-configuration ablation study designed to 
 | **2b** | 1x | nano | ✅ | ❌ | ✅ | **Yes** | Single-model FSM |
 | **3**  | 3x | nano | ✅ | ✅ | ❌ | No | Full system local |
 | **3b** | 1x | nano | ✅ | ✅ | ❌ | No | Single-model full local |
-| **4**  | 3x | nano | ✅ | ✅ | ✅ | **Yes** | **Production system** |
+| **4**  | 3x | nano | ✅ | ✅ | ✅ | **Yes** | **Production system (original)** |
 | **4b** | 1x | nano | ✅ | ✅ | ✅ | **Yes** | Single-model production |
+| **5**  | 3x | nano | ✅ | ✅ | ✅ | **Yes** | **Production with fast motion force Jetson** |
+| **6**  | 1x | medium | ✅* | ✅ | ✅ | **Yes** | **Naive always-offload baseline** |
+
+*Config 6 uses FSM mode but with FIXED_TIER override, effectively disabling adaptive logic
 
 ## Experimental Design Dimensions
 
@@ -208,12 +212,25 @@ python main_ablation3b.py  # 1x nano, FSM, fusion, local
 python jetson_worker/worker.py
 
 # Terminal 2 (Pi):
-python main_ablation4.py   # 3x nano, FSM, fusion, offload (PRODUCTION)
+python main_ablation4.py   # 3x nano, FSM, fusion, offload (PRODUCTION ORIGINAL)
 python main_ablation4b.py  # 1x nano, FSM, fusion, offload
 ```
 - Jetson required
-- Full production configuration
+- Full production configuration (original motion-aware policy)
 - Final comparison point
+
+### Phase 5: Motion-Aware Policies (Configs 5, 6)
+```bash
+# Terminal 1 (Jetson):
+python jetson_worker/worker.py
+
+# Terminal 2 (Pi):
+python main_ablation5.py   # 3x nano, FSM, fusion, offload, FAST_MOTION_TIER=medium
+python main_ablation6.py  # 1x medium, FIXED_TIER, always offload (naive baseline)
+```
+- Jetson required
+- Config 5: Tests new real-time policy for fast motion (safety > energy)
+- Config 6: Naive "always use Jetson" baseline showing why blind offloading is terrible for energy
 
 ---
 
@@ -253,15 +270,18 @@ python compute_latency.py ../storage/data_results/config1b/ -o results/config1b/
 # Pi-only configs (1, 1b, 3, 3b)
 python compute_energy.py ../storage/data_results/config1/ power_config1_pi.csv --idle-baseline 2.5 -o results/config1/energy
 
-# Pi + Jetson configs (2, 2b, 4, 4b)
+# Pi + Jetson configs (2, 2b, 4, 4b, 5, 6)
 python compute_energy.py ../storage/data_results/config2/ power_config2_pi.csv --power-jetson power_config2_jetson.csv --idle-baseline 2.5 -o results/config2/energy
+python compute_energy.py ../storage/data_results/ablation5/ power_config5_pi.csv --power-jetson power_config5_jetson.csv --idle-baseline 2.5 -o results/ablation5/energy
+python compute_energy.py ../storage/data_results/ablation6/ power_config6_pi.csv --power-jetson power_config6_jetson.csv --idle-baseline 2.5 -o results/ablation6/energy
 ```
 
-### 4. FSM Analysis (Configs 2-4, 2b-4b only)
+### 4. FSM Analysis (Configs 2-6, 2b-4b only)
 ```bash
 python analyze_fsm.py ../storage/data_results/config2/ -o results/config2/fsm
 python analyze_fsm.py ../storage/data_results/config2b/ -o results/config2b/fsm
-# ... repeat for FSM configs
+python analyze_fsm.py ../storage/data_results/ablation5/ -o results/ablation5/fsm
+# ... repeat for FSM configs (note: config 6 uses FSM but with fixed tier)
 ```
 
 ---
@@ -282,6 +302,10 @@ python analyze_fsm.py ../storage/data_results/config2b/ -o results/config2b/fsm
 | 3 vs 4 | Latency (p50) | -10-20% | Offload benefit |
 | 4b vs 4 | F1 score | +5-10% | Consensus value |
 | 4b vs 4 | Energy | +150-200% | Consensus cost |
+| 4 vs 5 | Energy (fast motion) | +10-20% | Fast motion policy cost |
+| 4 vs 5 | Latency (fast motion) | -5-10% | Fast motion policy benefit |
+| 4 vs 6 | Energy | +200-300% | Naive offload cost |
+| 4 vs 6 | Latency | -5-10% | Naive offload benefit (marginal) |
 
 ---
 
@@ -299,7 +323,7 @@ done
 python jetson_worker/worker.py
 
 # Terminal 2 (Pi), for each:
-for config in 2 2b 4 4b; do
+for config in 2 2b 4 4b 5 6; do
     echo "Running config ${config}..."
     python main_ablation${config}.py
 done
@@ -307,11 +331,46 @@ done
 
 ---
 
+## Additional Experimental Dimensions
+
+### 6. Fast Motion Policy (Config 5)
+
+**Question**: Does forcing medium tier and offload on fast motion improve real-time responsiveness?
+
+**Comparisons**:
+- Config 4 (original policy) vs Config 5 (fast motion force Jetson)
+
+**Metrics**:
+- Latency during fast motion: Should be lower with forced medium tier
+- Energy during fast motion: Should be higher due to always offloading
+- Overall accuracy: Should be similar or better with higher tier
+
+**Expected Outcome**: Config 5 should show improved latency for fast motion scenes at the cost of higher energy, validating the safety > energy tradeoff.
+
+---
+
+### 7. Naive Offload Baseline (Config 6)
+
+**Question**: Why is adaptive offloading better than always offloading?
+
+**Comparisons**:
+- Config 4 (adaptive) vs Config 6 (always offload)
+- Config 1b (local medium) vs Config 6 (remote medium)
+
+**Metrics**:
+- Energy: Should be significantly higher for Config 6 (always offload)
+- Latency: May be slightly better but not enough to justify energy cost
+- Network usage: Much higher for Config 6
+
+**Expected Outcome**: Config 6 demonstrates why blind offloading is inefficient, validating the need for adaptive policies.
+
+---
+
 ## Files Created
 
-- `config_ablation1.py` through `config_ablation4b.py` (8 files)
-- `main_ablation1.py` through `main_ablation4b.py` (8 files)
+- `config_ablation1.py` through `config_ablation6.py` (10 files)
+- `main_ablation1.py` through `main_ablation6.py` (10 files)
 - This guide: `ABLATION_STUDY_GUIDE.md`
 
-Total: **17 new files** for comprehensive ablation study.
+Total: **21 new files** for comprehensive ablation study.
 

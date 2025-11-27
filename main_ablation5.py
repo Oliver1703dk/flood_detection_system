@@ -1,10 +1,10 @@
 """
-Main entry point for Ablation 4: Full System Remote-Enabled (Production)
-- FSM enabled, multi-model consensus, sensor fusion enabled, remote offload enabled
+Main entry point for Ablation 5: Production with Fast Motion Force Jetson
+- Same as Ablation 4 BUT forces medium tier and offload when motion is FAST
 """
 
 # Override config module BEFORE any other imports
-import config_ablation4 as config
+import config_ablation5 as config
 import sys
 sys.modules['config'] = config
 
@@ -499,7 +499,7 @@ def main():
     to the process_message callback for processing.
     """
     print("=" * 60)
-    print("ABLATION 4: Full System Remote-Enabled (Production)")
+    print("ABLATION 5: Production with Fast Motion Force Jetson")
     print("=" * 60)
     
     # Debug: Print config file being used

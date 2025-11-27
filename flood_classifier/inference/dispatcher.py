@@ -167,6 +167,11 @@ class InferenceDispatcher:
             print(f"🔍 [Dispatcher] should_route_remote: remote_backend is None, returning False")
             return False
 
+        # Check for force offload override (Ablation 6)
+        if getattr(config, "FORCE_OFFLOAD", False):
+            print(f"🔍 [Dispatcher] should_route_remote: FORCE_OFFLOAD=True, routing to remote")
+            return True
+
         # Check for fast motion offload if enabled
         if motion is not None:
             from flood_classifier.fsm.flood_fsm import MotionState

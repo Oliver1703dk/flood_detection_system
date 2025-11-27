@@ -1153,6 +1153,18 @@ class FloodFSM:
         )
 
     def _choose_tier(self, motion: MotionState, *, resource_flag: bool) -> ModelTier:
+        # Check for fixed tier override (Ablation 6)
+        import config
+        fixed_tier = getattr(config, "FIXED_TIER", None)
+        if fixed_tier:
+            return ModelTier(fixed_tier)
+        
+        # Check for fast motion tier override (Ablation 5)
+        if motion == MotionState.FAST:
+            fast_tier = getattr(config, "FAST_MOTION_TIER", None)
+            if fast_tier:
+                return ModelTier(fast_tier)
+        
         anchor_state = self._resource_anchor_state if self.state == FloodState.S5 else self.state
         tiers = [ModelTier.NANO, ModelTier.SMALL, ModelTier.MEDIUM, ModelTier.LARGE]
 
