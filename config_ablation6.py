@@ -33,7 +33,7 @@ model_number = 1
 USE_BASELINE_MODELS = True
 
 # MQTT settings for receiving from collector
-MQTT_BROKER_URL = "192.168.20.1"  # Jetson's IP on processor subnet
+MQTT_BROKER_URL = "192.168.42.10"
 MQTT_BROKER_PORT = 1883
 MQTT_TOPIC = "sensor/data"
 
