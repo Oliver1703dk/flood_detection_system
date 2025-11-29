@@ -1,0 +1,42 @@
+{
+    "sensor_data": {
+        "temperature": 12.0,
+        "humidity": 88.0,
+        "pressure": 995.0
+    },
+    "metadata": {
+        "timestamp": "2025-11-29T12:36:00.590712",
+        "location": "50.8503,4.3517",
+        "camera_id": "video_camera_01",
+        "motion": "slow",
+        "resource_constrained": false,
+        "collector_capture_ts": 1764416160.5575972,
+        "video_timestamp_sec": 25.4,
+        "video_file": "flood_video_20251005_150257.mp4",
+        "collector_publish_ts": 1764416160.654984,
+        "processor_queue_enter_ts": 1764416160.6540787,
+        "processor_receive_ts": 1764416161.1421363,
+        "processor_queue_exit_ts": 1764416161.142074
+    },
+    "classification_result": "No Flood",
+    "timing": {
+        "json_parse_s": 0.0005612959994323319,
+        "processor_queue_enter_ts": 1764416160.6540787,
+        "collector_capture_ts": 1764416160.5575972,
+        "collector_capture_to_processor_receive_s": 0.5845391750335693,
+        "collector_capture_to_queue_enter_s": 0.0964815616607666,
+        "collector_publish_ts": 1764416160.654984,
+        "collector_publish_to_processor_receive_s": 0.4871523380279541,
+        "collector_publish_to_queue_enter_s": -0.0009052753448486328,
+        "process_start_ts": 1764416161.1421363,
+        "pipeline_latency_s": 0.7733112959995196,
+        "queue_wait_s": 0.4879952779992891,
+        "processor_queue_exit_ts": 1764416161.142074,
+        "validation_storage_s": 0.0020844259997829795,
+        "preprocess_s": 0.018823111000529025,
+        "result_format_s": 3.8520011003129184e-06,
+        "baseline_update_s": 0.00014407399976335,
+        "result_save_s": 0.0011736659998859977,
+        "total_pipeline_latency_s": 0.9878248519999033
+    }
+}
