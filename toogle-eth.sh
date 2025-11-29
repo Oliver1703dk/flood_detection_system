@@ -1,14 +1,13 @@
+# ~/toggle.sh  (overwrite the old one)
 #!/bin/bash
-
-if [[ "$1" == "internet" ]]; then
-    echo "Switching to Ethernet Internet Mode..."
-    sudo nmcli con down eth-static
+if [[ "$1" == "local" ]]; then
+    echo "→ Local cluster mode (MQTT always works)"
+    sudo nmcli con up local-static
+elif [[ "$1" == "internet" ]]; then
+    echo "→ Internet mode — whole cluster gets internet via university wall"
     sudo nmcli con up eth-internet
-elif [[ "$1" == "static" ]]; then
-    echo "Switching to Ethernet Static Pi-to-Pi Mode..."
-    sudo nmcli con down eth-internet
-    sudo nmcli con up eth-static
 else
-    echo "Usage: ./toggle-eth.sh [internet|static]"
+    echo "Usage: $0 [local|internet]"
+    echo "Active connection:"
+    nmcli con show --active | grep ethernet
 fi
-
