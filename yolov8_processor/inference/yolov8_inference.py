@@ -68,12 +68,23 @@ class YOLOv8Inference:
         output_dir = Path(config.DETECTION_OUTPUT_DIR)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use run_id from metadata or config, or generate timestamp for filename
+        # Generate unique timestamp for this frame (don't use run_id - that's constant for entire run)
         metadata = metadata or {}
         if not isinstance(metadata, dict):
             metadata = dict(metadata)
-        run_id = metadata.get("run_id") or getattr(config, 'RUN_ID', None)
-        timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        
+        # Use video_timestamp_sec if available (unique per frame), otherwise generate unique timestamp
+        video_timestamp_sec = metadata.get("video_timestamp_sec")
+        if video_timestamp_sec is not None:
+            # Convert video timestamp to string format for filename
+            try:
+                timestamp = datetime.fromtimestamp(video_timestamp_sec).strftime("%Y%m%d-%H%M%S-%f")
+            except (ValueError, OSError, TypeError):
+                # Fallback to current time if conversion fails
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        else:
+            # Generate unique timestamp for this frame
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
         identifier = (self.identifier or "").strip()
         if not identifier:

@@ -184,23 +184,29 @@ class YOLOv8FinalClassifier:
         
         _ = image_name  # compatibility; filenames derive from run_id now
 
+        # New structure: storage/image-detections/ablationX/run_<timestamp>/
+        # The run_id is already in the base path (DETECTION_OUTPUT_DIR), so just use it directly
+        output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Generate unique timestamp for this frame (don't use run_id - that's constant for entire run)
         metadata = metadata or {}
         if not isinstance(metadata, dict):
             metadata = dict(metadata)
-
-        video_file = metadata.get("video_file")
-        run_id = metadata.get("run_id")
-
-        output_dir = Path(config.DETECTION_OUTPUT_DIR)
-        if video_file:
-            output_dir = output_dir / sanitize_path_segment(video_file, fallback="unknown_video")
-            # Add run_id folder if available
-            if run_id:
-                safe_run_id = sanitize_path_segment(run_id, fallback="unknown_run")
-                output_dir = output_dir / safe_run_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        
+        # Use video_timestamp_sec if available (unique per frame), otherwise generate unique timestamp
+        video_timestamp_sec = metadata.get("video_timestamp_sec")
+        if video_timestamp_sec is not None:
+            # Convert video timestamp to string format for filename
+            try:
+                timestamp = datetime.fromtimestamp(video_timestamp_sec).strftime("%Y%m%d-%H%M%S-%f")
+            except (ValueError, OSError, TypeError):
+                # Fallback to current time if conversion fails
+                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        else:
+            # Generate unique timestamp for this frame
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        
         filename = f"{timestamp}_aggregated.jpg"
         save_path = output_dir / filename
 
