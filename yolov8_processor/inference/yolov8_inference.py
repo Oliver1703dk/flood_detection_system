@@ -63,22 +63,16 @@ class YOLOv8Inference:
                 cv2.putText(image_8u, label_text, (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-        # Persist each inference result with a unique timestamp-based filename.
+        # New structure: storage/image-detections/ablationX/run_<timestamp>/
+        # The run_id is already in the base path (DETECTION_OUTPUT_DIR), so just use it directly
+        output_dir = Path(config.DETECTION_OUTPUT_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use run_id from metadata or config, or generate timestamp for filename
         metadata = metadata or {}
         if not isinstance(metadata, dict):
             metadata = dict(metadata)
-        video_file = metadata.get("video_file")
-        run_id = metadata.get("run_id")
-
-        output_dir = Path(config.DETECTION_OUTPUT_DIR)
-        if video_file:
-            output_dir = output_dir / sanitize_path_segment(video_file, fallback="unknown_video")
-            # Add run_id folder if available
-            if run_id:
-                safe_run_id = sanitize_path_segment(run_id, fallback="unknown_run")
-                output_dir = output_dir / safe_run_id
-        output_dir.mkdir(parents=True, exist_ok=True)
-
+        run_id = metadata.get("run_id") or getattr(config, 'RUN_ID', None)
         timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")
 
         identifier = (self.identifier or "").strip()

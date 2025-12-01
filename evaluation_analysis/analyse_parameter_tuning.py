@@ -87,45 +87,67 @@ def extract_scores_from_result(result: Dict) -> Dict[str, float]:
 def load_ablation_results(results_dir: Path, ablation_name: str) -> List[Dict]:
     """Load all JSON results for a specific ablation.
     
-    Expected structure: ablation_name/video_file/run_id/*.json
+    Supports multiple structures:
+    - New structure: ablation_name/run_<timestamp>/*.json (run folders directly under ablation)
+    - Old structure: ablation_name/video_file/run_id/*.json (backward compatibility)
+    - Old structure: ablation_name/video_file/*.json (backward compatibility)
     """
     ablation_dir = results_dir / ablation_name
     if not ablation_dir.exists():
         return []
     
     results = []
-    for video_dir in ablation_dir.iterdir():
-        if not video_dir.is_dir():
-            continue
-        
-        # Check if there are run_id subdirectories (new structure) or JSON files directly (old structure)
-        run_dirs = [d for d in video_dir.iterdir() if d.is_dir()]
-        json_files_direct = list(video_dir.glob("*.json"))
-        
-        if run_dirs:
-            # New structure: video_file/run_id/*.json
-            for run_dir in run_dirs:
-                for json_file in run_dir.glob("*.json"):
-                    try:
-                        with open(json_file, 'r') as f:
-                            data = json.load(f)
-                            data['_ablation'] = ablation_name
-                            data['_file_path'] = str(json_file)
-                            data['_run_id'] = run_dir.name
-                            results.append(data)
-                    except Exception as e:
-                        print(f"Warning: Failed to load {json_file}: {e}")
-        elif json_files_direct:
-            # Old structure: video_file/*.json (backward compatibility)
-            for json_file in json_files_direct:
+    
+    # Check for new structure first: run folders directly under ablation
+    run_dirs_new = [d for d in ablation_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+    
+    if run_dirs_new:
+        # New structure: ablation_name/run_<timestamp>/*.json
+        for run_dir in run_dirs_new:
+            for json_file in run_dir.glob("*.json"):
                 try:
                     with open(json_file, 'r') as f:
                         data = json.load(f)
                         data['_ablation'] = ablation_name
                         data['_file_path'] = str(json_file)
+                        data['_run_id'] = run_dir.name
                         results.append(data)
                 except Exception as e:
                     print(f"Warning: Failed to load {json_file}: {e}")
+    else:
+        # Old structure: check for video_file folders
+        for video_dir in ablation_dir.iterdir():
+            if not video_dir.is_dir():
+                continue
+            
+            # Check if there are run_id subdirectories (old nested structure) or JSON files directly
+            run_dirs = [d for d in video_dir.iterdir() if d.is_dir()]
+            json_files_direct = list(video_dir.glob("*.json"))
+            
+            if run_dirs:
+                # Old structure: video_file/run_id/*.json
+                for run_dir in run_dirs:
+                    for json_file in run_dir.glob("*.json"):
+                        try:
+                            with open(json_file, 'r') as f:
+                                data = json.load(f)
+                                data['_ablation'] = ablation_name
+                                data['_file_path'] = str(json_file)
+                                data['_run_id'] = run_dir.name
+                                results.append(data)
+                        except Exception as e:
+                            print(f"Warning: Failed to load {json_file}: {e}")
+            elif json_files_direct:
+                # Old structure: video_file/*.json (backward compatibility)
+                for json_file in json_files_direct:
+                    try:
+                        with open(json_file, 'r') as f:
+                            data = json.load(f)
+                            data['_ablation'] = ablation_name
+                            data['_file_path'] = str(json_file)
+                            results.append(data)
+                    except Exception as e:
+                        print(f"Warning: Failed to load {json_file}: {e}")
     
     return results
 
@@ -374,6 +396,67 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
     min_score = valid_df['combined_score'].min()
     max_score = valid_df['combined_score'].max()
     
+    # Detect actual sensor boost baseline from data (if available)
+    # IMPORTANT: Only check class 0 (no flood) samples to detect baseline,
+    # because baseline should appear even when there's no flooding.
+    # If we check all samples, a video with full flooding might have all
+    # high sensor_boost values, which would be incorrectly identified as baseline.
+    sensor_boost_baseline = 0.0
+    sensor_boost_detected = False
+    if 'sensor_boost' in valid_df.columns and 'ground_truth' in valid_df.columns:
+        # Only look at no-flood samples (ground_truth == 0) to detect baseline
+        no_flood_df = valid_df[valid_df['ground_truth'] == 0]
+        sensor_boost_values = no_flood_df['sensor_boost'].dropna()
+        
+        if len(sensor_boost_values) > 0:
+            if debug:
+                print(f"\nAnalyzing sensor boost baseline from {len(sensor_boost_values)} no-flood samples...")
+            
+            # Check if there's a consistent baseline value in no-flood samples
+            # First try mode (most common value)
+            boost_mode = sensor_boost_values.mode()
+            if len(boost_mode) > 0:
+                mode_value = float(boost_mode.iloc[0])
+                mode_count = (sensor_boost_values == mode_value).sum()
+                mode_fraction = mode_count / len(sensor_boost_values)
+                # If mode value is > 0 and appears in at least 30% of no-flood samples, use it as baseline
+                # (Higher threshold since we're only looking at class 0)
+                if mode_value > 0.05 and mode_fraction >= 0.3:
+                    sensor_boost_baseline = mode_value
+                    sensor_boost_detected = True
+                    if debug:
+                        print(f"  Sensor boost baseline detected: {sensor_boost_baseline:.3f} "
+                              f"(appears in {mode_fraction*100:.1f}% of no-flood samples)")
+            
+            # If mode didn't work, try median as fallback
+            if not sensor_boost_detected:
+                boost_median = float(sensor_boost_values.median())
+                if boost_median > 0.05:
+                    # Check if median is representative (not skewed by outliers)
+                    boost_q25 = float(sensor_boost_values.quantile(0.25))
+                    boost_q75 = float(sensor_boost_values.quantile(0.75))
+                    # Median should be close to Q25 or Q75, and all should be relatively low (< 0.3)
+                    # to distinguish baseline from flood-induced boosts
+                    if (abs(boost_median - boost_q25) < 0.05 or abs(boost_median - boost_q75) < 0.05) and boost_median < 0.3:
+                        sensor_boost_baseline = boost_median
+                        sensor_boost_detected = True
+                        if debug:
+                            print(f"  Sensor boost baseline detected (via median): {sensor_boost_baseline:.3f}")
+            
+            if not sensor_boost_detected and debug:
+                boost_stats = {
+                    'min': float(sensor_boost_values.min()),
+                    'max': float(sensor_boost_values.max()),
+                    'median': float(sensor_boost_values.median()),
+                    'mean': float(sensor_boost_values.mean()),
+                    'zero_count': int((sensor_boost_values == 0).sum()),
+                    'zero_fraction': float((sensor_boost_values == 0).sum() / len(sensor_boost_values))
+                }
+                print(f"  No consistent baseline detected in no-flood samples. Stats: {boost_stats}")
+                print(f"  Zero boost in {boost_stats['zero_fraction']*100:.1f}% of no-flood samples")
+        elif debug:
+            print(f"\nNo no-flood samples available to detect sensor boost baseline")
+    
     # Distribution-aware initial search bounds
     if use_distribution_aware and distributions:
         # Low threshold should be above class 0's q75 (to avoid false positives)
@@ -382,9 +465,15 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
         class_1_q75 = distributions.get('class_1_q75', 0.5)
         class_2_q25 = distributions.get('class_2_q25', 1.0)
         
-        # Account for sensor boost baseline (typically 0.11)
-        sensor_boost_baseline = 0.11
-        suggested_low_min = max(class_0_q75 + 0.05, sensor_boost_baseline + 0.05)
+        # Account for sensor boost baseline (only if detected from data)
+        if sensor_boost_detected and sensor_boost_baseline > 0:
+            suggested_low_min = max(class_0_q75 + 0.05, sensor_boost_baseline + 0.05)
+            if debug:
+                print(f"  Using sensor boost baseline ({sensor_boost_baseline:.3f}) to guide threshold search")
+        else:
+            suggested_low_min = max(class_0_q75 + 0.05, 0.05)
+            if debug and 'sensor_boost' in valid_df.columns:
+                print(f"  No sensor boost baseline detected - thresholds will be optimized without boost assumption")
         suggested_low_max = min(class_1_q75, 0.5)  # Don't go too high
         
         suggested_high_min = max(class_1_q75, class_2_q25 * 0.5)  # Between class 1 and 2

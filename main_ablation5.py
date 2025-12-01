@@ -8,10 +8,11 @@ import config_ablation5 as config
 import sys
 sys.modules['config'] = config
 
-# Now import the rest (they will use config_ablation4)
+# Now import the rest (they will use config_ablation5)
 from datetime import datetime
 from dataclasses import asdict, is_dataclass
 from copy import deepcopy
+from pathlib import Path
 import os
 import json
 import base64
@@ -131,6 +132,13 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         
         original_metadata = deepcopy(message_json.get("metadata", {}) or {})
         metadata = message_json.setdefault("metadata", {})
+        
+        # Add run_id to metadata if available from config
+        if 'run_id' not in metadata:
+            run_id = getattr(config, 'RUN_ID', None)
+            if run_id:
+                metadata["run_id"] = run_id
+        
         print("\n--- Received MQTT Message ---")
         # Debug: Frame processing started
         print(f"⏱️  [PI] Frame processing started (JSON parse: {json_parse_duration*1000:.1f}ms)")
@@ -502,8 +510,43 @@ def main():
     print("ABLATION 5: Production with Fast Motion Force Jetson")
     print("=" * 60)
     
+    # Extract ablation name from config file name (e.g., "config_ablation5.py" -> "ablation5")
+    config_file = getattr(config, '__file__', '')
+    if 'ablation' in config_file:
+        ablation_name = config_file.split('config_')[1].split('.py')[0]
+    else:
+        # Fallback: extract from RESULTS_STORAGE_DIR if available
+        results_dir = getattr(config, 'RESULTS_STORAGE_DIR', 'storage/data_results/ablation5')
+        if '/ablation' in results_dir:
+            ablation_name = results_dir.split('/ablation')[1].split('/')[0]
+            ablation_name = f"ablation{ablation_name}"
+        else:
+            ablation_name = "ablation5"  # default fallback
+    
+    # Generate a single run_id for this entire run
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    config.RUN_ID = run_id  # Store in config for access throughout the run
+    print(f"📁 [PI] Run ID: {run_id}")
+    print(f"📁 [PI] Ablation: {ablation_name}")
+    
+    # Create run-specific storage directories
+    # Structure: storage/image-detections/ablation5/run_<timestamp>/
+    run_image_detections = Path(f"storage/image-detections/{ablation_name}/run_{run_id}")
+    run_video_results = Path(f"storage/video_results/{ablation_name}/run_{run_id}")
+    
+    # Update config paths
+    config.DETECTION_OUTPUT_DIR = run_image_detections
+    config.RESULTS_VIDEO_STORAGE_DIR = str(run_video_results)
+    
+    # Create directories
+    run_image_detections.mkdir(parents=True, exist_ok=True)
+    run_video_results.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📂 [PI] Storage directories created:")
+    print(f"   - Image detections: {run_image_detections}")
+    print(f"   - Video results: {run_video_results}")
+    
     # Debug: Print config file being used
-    config_file = getattr(config, '__file__', 'unknown')
     print(f"📋 [PI] Using config file: {config_file}")
     print(f"📋 [PI] Config settings:")
     print(f"   - CLASSIFICATION_MODE: {getattr(config, 'CLASSIFICATION_MODE', 'unknown')}")

@@ -1,6 +1,7 @@
 from datetime import datetime
 from dataclasses import asdict, is_dataclass
 from copy import deepcopy
+from pathlib import Path
 import os
 import json
 import base64
@@ -123,6 +124,14 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         
         original_metadata = deepcopy(message_json.get("metadata", {}) or {})
         metadata = message_json.setdefault("metadata", {})
+        
+        # Add run_id to metadata if available from config
+        if 'run_id' not in metadata:
+            import config
+            run_id = getattr(config, 'RUN_ID', None)
+            if run_id:
+                metadata["run_id"] = run_id
+        
         print("\n--- Received MQTT Message ---")
         # Debug: Frame processing started
         print(f"⏱️  [PI] Frame processing started (JSON parse: {json_parse_duration*1000:.1f}ms)")

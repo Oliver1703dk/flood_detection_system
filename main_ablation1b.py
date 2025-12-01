@@ -11,6 +11,8 @@ import sys
 sys.modules['config'] = config
 
 # Now import the rest (they will use config_ablation1b)
+from pathlib import Path
+from datetime import datetime
 import main_final
 from main_final import *
 
@@ -44,16 +46,51 @@ def main():
     print("=" * 60)
     print("ABLATION 1b: Lightweight Static Baseline (1× nano)")
     print("=" * 60)
+    
+    # Extract ablation name from config file name (e.g., "config_ablation1b.py" -> "ablation1b")
+    config_file = getattr(config, '__file__', '')
+    if 'ablation' in config_file:
+        ablation_name = config_file.split('config_')[1].split('.py')[0]
+    else:
+        # Fallback: extract from RESULTS_STORAGE_DIR if available
+        results_dir = getattr(config, 'RESULTS_STORAGE_DIR', 'storage/data_results/ablation1b')
+        if '/ablation' in results_dir:
+            ablation_name = results_dir.split('/ablation')[1].split('/')[0]
+            ablation_name = f"ablation{ablation_name}"
+        else:
+            ablation_name = "ablation1b"  # default fallback
+    
+    # Generate a single run_id for this entire run
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    config.RUN_ID = run_id  # Store in config for access throughout the run
+    print(f"📁 [PI] Run ID: {run_id}")
+    print(f"📁 [PI] Ablation: {ablation_name}")
+    
+    # Create run-specific storage directories
+    # Structure: storage/image-detections/ablation1b/run_<timestamp>/
+    run_image_detections = Path(f"storage/image-detections/{ablation_name}/run_{run_id}")
+    run_video_results = Path(f"storage/video_results/{ablation_name}/run_{run_id}")
+    
+    # Update config paths
+    config.DETECTION_OUTPUT_DIR = run_image_detections
+    config.RESULTS_VIDEO_STORAGE_DIR = str(run_video_results)
+    
+    # Create directories
+    run_image_detections.mkdir(parents=True, exist_ok=True)
+    run_video_results.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📂 [PI] Storage directories created:")
+    print(f"   - Image detections: {run_image_detections}")
+    print(f"   - Video results: {run_video_results}")
+    
     print("Configuration:")
     print("  - Mode: yolo_sensor (no FSM)")
     print("  - Models: 1x nano (single model, no consensus)")
     print("  - Sensor Fusion: Disabled")
     print("  - Remote Offload: Disabled")
     print("  - Purpose: Minimum resource consumption baseline")
-    print("=" * 60)
     
     # Debug: Print config file being used
-    config_file = getattr(config, '__file__', 'unknown')
     print(f"📋 [PI] Using config file: {config_file}")
     print(f"📋 [PI] Config settings:")
     print(f"   - CLASSIFICATION_MODE: {getattr(config, 'CLASSIFICATION_MODE', 'unknown')}")

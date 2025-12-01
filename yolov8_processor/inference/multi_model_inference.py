@@ -75,7 +75,12 @@ class MultiModelInference:
         Returns a single list of detection results.
         """
         print(image_name)
-        run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        
+        # Use run_id from config if available (set at startup), otherwise generate one (for backwards compatibility)
+        run_id = getattr(config, 'RUN_ID', None)
+        if run_id is None:
+            run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        
         results_dict = {}
         
         # Store run_id in metadata for use in saving paths

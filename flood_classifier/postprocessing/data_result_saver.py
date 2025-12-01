@@ -61,12 +61,9 @@ class DataResultsSaver:
         run_id = result_data.get("metadata", {}).get("run_id")
 
         if video_file:
-            safe_video_dir = sanitize_path_segment(video_file, fallback="unknown_video")
-            target_dir = os.path.join(self.video_storage_dir, safe_video_dir)
-            # Add run_id folder if available
-            if run_id:
-                safe_run_id = sanitize_path_segment(run_id, fallback="unknown_run")
-                target_dir = os.path.join(target_dir, safe_run_id)
+            # New structure: storage/video_results/ablationX/run_<timestamp>/
+            # The run_id is already in the base path, so just use video_storage_dir directly
+            target_dir = self.video_storage_dir
         else:
             # Create a subfolder for today's date.
             target_dir = os.path.join(self.storage_dir, date_str)
