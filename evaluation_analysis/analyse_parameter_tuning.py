@@ -110,7 +110,10 @@ def load_ablation_results(results_dir: Path, ablation_name: str) -> List[Dict]:
 
 def match_result_to_ground_truth(result: Dict, gt: Dict[str, Dict[int, int]], 
                                   tolerance_sec: float = 0.5) -> Optional[int]:
-    """Match result to ground truth by video_timestamp_sec."""
+    """Match result to ground truth by video_timestamp_sec.
+    
+    Always uses the closest available frame, not just any frame within tolerance.
+    """
     metadata = result.get('metadata', {})
     video_file = metadata.get('video_file')
     timestamp_sec = metadata.get('video_timestamp_sec')
@@ -121,17 +124,19 @@ def match_result_to_ground_truth(result: Dict, gt: Dict[str, Dict[int, int]],
     if video_file not in gt:
         return None
     
-    # Round to nearest second
-    t = int(round(timestamp_sec))
+    # Find the closest ground truth frame
+    closest_t = None
+    min_diff = float('inf')
     
-    # Check exact match first
-    if t in gt[video_file]:
-        return gt[video_file][t]
-    
-    # Check within tolerance
     for gt_t, label in gt[video_file].items():
-        if abs(gt_t - timestamp_sec) <= tolerance_sec:
-            return label
+        diff = abs(gt_t - timestamp_sec)
+        if diff < min_diff:
+            min_diff = diff
+            closest_t = gt_t
+    
+    # Only return if within tolerance
+    if closest_t is not None and min_diff <= tolerance_sec:
+        return gt[video_file][closest_t]
     
     return None
 
