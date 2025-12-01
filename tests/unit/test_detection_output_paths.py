@@ -40,9 +40,9 @@ def test_aggregated_detections_route_to_video_folder(tmp_path, monkeypatch):
         image,
         [aggregated],
         run_id="123",
-        metadata={"video_file": "clips/flood_clip.mp4"},
+        metadata={"video_file": "clips/flood_clip.mp4", "run_id": "123"},
     )
 
     assert saved_paths, "Expected a detection image to be written"
-    expected_dir = tmp_path / "clips_flood_clip.mp4"
+    expected_dir = tmp_path / "clips_flood_clip.mp4" / "123"
     assert saved_paths[0].parent == expected_dir

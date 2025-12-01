@@ -78,6 +78,13 @@ class MultiModelInference:
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         results_dict = {}
         
+        # Store run_id in metadata for use in saving paths
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = dict(metadata)
+        metadata["run_id"] = run_id
+        
         # Track energy for YOLO inference
         energy_tracker = get_energy_tracker()
         energy_metrics = {}

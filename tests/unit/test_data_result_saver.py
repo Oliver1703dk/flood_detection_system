@@ -44,6 +44,7 @@ def test_save_video_path_when_video_file_present(tmp_path):
         "metadata": {
             "camera_id": "cam/02",
             "video_file": "clips/flood_clip.mp4",
+            "run_id": "20240101-120000-123456",
         },
     }
 
@@ -55,8 +56,13 @@ def test_save_video_path_when_video_file_present(tmp_path):
     video_subdirs = list(video_dir.iterdir())
     assert len(video_subdirs) == 1
     assert video_subdirs[0].name == "clips_flood_clip.mp4"
+    
+    # Check for run_id subdirectory
+    run_subdirs = list(video_subdirs[0].iterdir())
+    assert len(run_subdirs) == 1
+    assert run_subdirs[0].name == "20240101-120000-123456"
 
-    saved_file = next(video_subdirs[0].iterdir())
+    saved_file = next(run_subdirs[0].iterdir())
     saved_data = _load_json(saved_file)
     assert saved_data["metadata"]["video_file"] == "clips/flood_clip.mp4"
     assert saved_data["metadata"]["camera_id"] == "cam/02"

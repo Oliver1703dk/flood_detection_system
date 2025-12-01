@@ -222,6 +222,13 @@ def run_yolo_inference(payload: Dict[str, Any]) -> Dict[str, Any]:
         _log(f"🔄 [JETSON] Running {model_count} model(s)...")
 
         run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        # Store run_id in metadata for use in saving paths
+        if metadata is None:
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = dict(metadata)
+        metadata["run_id"] = run_id
+        
         results_by_model = {}
         for idx, model in enumerate(models, start=1):
             # Debug: Individual model inference

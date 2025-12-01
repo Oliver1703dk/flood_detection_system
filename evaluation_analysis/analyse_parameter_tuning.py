@@ -85,7 +85,10 @@ def extract_scores_from_result(result: Dict) -> Dict[str, float]:
 
 
 def load_ablation_results(results_dir: Path, ablation_name: str) -> List[Dict]:
-    """Load all JSON results for a specific ablation."""
+    """Load all JSON results for a specific ablation.
+    
+    Expected structure: ablation_name/video_file/run_id/*.json
+    """
     ablation_dir = results_dir / ablation_name
     if not ablation_dir.exists():
         return []
@@ -95,15 +98,34 @@ def load_ablation_results(results_dir: Path, ablation_name: str) -> List[Dict]:
         if not video_dir.is_dir():
             continue
         
-        for json_file in video_dir.glob("*.json"):
-            try:
-                with open(json_file, 'r') as f:
-                    data = json.load(f)
-                    data['_ablation'] = ablation_name
-                    data['_file_path'] = str(json_file)
-                    results.append(data)
-            except Exception as e:
-                print(f"Warning: Failed to load {json_file}: {e}")
+        # Check if there are run_id subdirectories (new structure) or JSON files directly (old structure)
+        run_dirs = [d for d in video_dir.iterdir() if d.is_dir()]
+        json_files_direct = list(video_dir.glob("*.json"))
+        
+        if run_dirs:
+            # New structure: video_file/run_id/*.json
+            for run_dir in run_dirs:
+                for json_file in run_dir.glob("*.json"):
+                    try:
+                        with open(json_file, 'r') as f:
+                            data = json.load(f)
+                            data['_ablation'] = ablation_name
+                            data['_file_path'] = str(json_file)
+                            data['_run_id'] = run_dir.name
+                            results.append(data)
+                    except Exception as e:
+                        print(f"Warning: Failed to load {json_file}: {e}")
+        elif json_files_direct:
+            # Old structure: video_file/*.json (backward compatibility)
+            for json_file in json_files_direct:
+                try:
+                    with open(json_file, 'r') as f:
+                        data = json.load(f)
+                        data['_ablation'] = ablation_name
+                        data['_file_path'] = str(json_file)
+                        results.append(data)
+                except Exception as e:
+                    print(f"Warning: Failed to load {json_file}: {e}")
     
     return results
 

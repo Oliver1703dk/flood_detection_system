@@ -189,10 +189,15 @@ class YOLOv8FinalClassifier:
             metadata = dict(metadata)
 
         video_file = metadata.get("video_file")
+        run_id = metadata.get("run_id")
 
         output_dir = Path(config.DETECTION_OUTPUT_DIR)
         if video_file:
             output_dir = output_dir / sanitize_path_segment(video_file, fallback="unknown_video")
+            # Add run_id folder if available
+            if run_id:
+                safe_run_id = sanitize_path_segment(run_id, fallback="unknown_run")
+                output_dir = output_dir / safe_run_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = run_id or datetime.now().strftime("%Y%m%d-%H%M%S-%f")

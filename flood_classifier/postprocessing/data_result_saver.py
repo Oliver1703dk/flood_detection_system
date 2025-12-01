@@ -58,10 +58,15 @@ class DataResultsSaver:
         # Extract camera_id from metadata if available.
         camera_id = result_data.get("metadata", {}).get("camera_id", "unknown")
         video_file = result_data.get("metadata", {}).get("video_file")
+        run_id = result_data.get("metadata", {}).get("run_id")
 
         if video_file:
             safe_video_dir = sanitize_path_segment(video_file, fallback="unknown_video")
             target_dir = os.path.join(self.video_storage_dir, safe_video_dir)
+            # Add run_id folder if available
+            if run_id:
+                safe_run_id = sanitize_path_segment(run_id, fallback="unknown_run")
+                target_dir = os.path.join(target_dir, safe_run_id)
         else:
             # Create a subfolder for today's date.
             target_dir = os.path.join(self.storage_dir, date_str)
