@@ -72,14 +72,10 @@ class EnhancedImageClassifier:
             else:
                 # Use actual count of agreeing models
                 model_agreement = len(model_ids_list)
+            #Defaultconfidencemultiplierandagreementboostfor3-modelbaseline
             
-            # For single model, boost confidence and simulate 3-model agreement
-            if num_models == 1:
-                conf_multiplier = 2.5
-                effective_agreement = 3
-            else:
-                conf_multiplier = 1.0
-                effective_agreement = model_agreement
+            conf_multiplier = 1.0
+            effective_agreement = model_agreement
             
             agreement_boost = 1 + 0.1 * (effective_agreement - 1)  # +10% per extra agreeing model
             score = (conf * conf_multiplier) * area_ratio * agreement_boost * model_normalization

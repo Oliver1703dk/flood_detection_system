@@ -57,8 +57,8 @@ DEFAULT_BASELINE = {
 
 # FSM parameters (not used in yolo_sensor mode)
 FSM_DEFAULTS = {
-    "threshold_low": 0.35,
-    "threshold_high": 0.65,
+    "threshold_low": 0.3,
+    "threshold_high": 0.5,
     "frames_high": 2,
     "frames_low": 2,
     "frames_ambiguous": 2,
