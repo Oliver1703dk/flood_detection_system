@@ -12,21 +12,44 @@ Build a data extraction and metric computation pipeline that processes all ablat
 - Location: `storage/video_results/ablationX/run_<timestamp>/*.json`
 - Contains:
   - `sensor_data`: temperature, humidity, pressure
-  - `metadata`: video_file, video_timestamp_sec, run_id, motion, resource_constrained, timing fields
+  - `metadata`: video_file, video_timestamp_sec, run_id, motion, resource_constrained, sensor_baseline, sensor_anomalies
   - `classification_result`: Can be either:
-    - **String format**: Simple string like "No Flood", "Some Water", "Flooded" (legacy format)
-    - **Dict format**: Detailed dict with frame_index, state, model_tier, prediction, scores (combined_score, image_score, sensor_boost), counters, backend, timing breakdown, sensor_prediction
-  - `timing`: per-stage latency metrics
+    - **String format** (non-FSM configs 1, 1b): Simple string like "No Flood", "Some Water", "Flooded"
+    - **Dict format** (FSM configs 2-6): Detailed dict with frame_index, state, model_tier, prediction, scores (combined_score, image_score, sensor_boost, sensor_prediction), counters, backend, backend_info, timing breakdown, llm_used, llm_prediction, s2_llm_confirmed, conflict, drift, flapping, skipped, model_switched
+  - `timing`: per-stage latency metrics including `total_pipeline_latency_s`
 
 ### Ground Truth Labels
 
 - Location: `test_videos/labels/*.jsonl`
-- Format: `{"video": "filename.mp4", "labels": [{"t": seconds, "y": "flood|sus|no_flood"}]}`
+- Format: Single JSON object per file (not line-by-line JSONL):
+  ```json
+  {"video": "flood_video_20251005_145739.mp4", "fps_truth": 1, "labels": [{"t": 0, "y": "flood"}, {"t": 1, "y": "sus"}, ...]}
+  ```
 
-### Energy Data (flexible format)
+- Label values: `"flood"` → 2, `"sus"` → 1, `"no_flood"` → 0
+- Timestamps `t` are integer seconds
 
-- JSON files with entries every 100-500ms
-- Expected fields: timestamp, power/energy measurements (format to be determined)
+### Energy Data (optional)
+
+- Location: `storage/video_energy_results/*.jsonl`
+- Format: Single JSON object per file (same structure as ground truth labels):
+  ```json
+  {
+    "run_id": "20251202-194508-743316",
+    "video_file": "flood_video_20251005_145739.mp4",
+    "measurements": [
+      {"t": 0.0, "energy_total_j": 0.0, "power_total_w": 12.5},
+      {"t": 0.1, "energy_total_j": 1.25, "power_total_w": 12.5},
+      {"t": 0.2, "energy_total_j": 2.5, "power_total_w": 12.5},
+      ...
+    ]
+  }
+  ```
+
+- Timestamps `t` are relative to run start (in seconds, float)
+- `energy_total_j`: Cumulative total system energy (all devices combined) in Joules
+- `power_total_w`: Instantaneous total system power in Watts
+- Samples typically at 100-500ms intervals
 
 ## Implementation Stages
 
@@ -35,53 +58,126 @@ Build a data extraction and metric computation pipeline that processes all ablat
 **Functions:**
 
 - `discover_runs(results_dir: Path) -> List[RunInfo]`: Walk `storage/video_results/` and discover all ablation folders and run directories. For each ablation folder, discover all `run_<timestamp>` subdirectories and sort them chronologically.
+
 - `extract_run_metadata(run_path: Path, sample_json: Dict, run_index_in_ablation: int) -> Dict`: Extract:
-  - `ablation_name`: From folder name (e.g., "ablation1" → "1", "ablation2" → "2")
-  - `sequence_id`: Extract from `video_file` in metadata (e.g., "flood_video_20251005_145739.mp4" → extract sequence identifier)
-  - `sensor_variant`: Extract from metadata field `sensor_variant` if present, otherwise infer from sensor data patterns or default to "Neutral"
+  - `ablation_name`: From folder name, preserve variant suffix (e.g., "ablation1" → "1", "ablation1b" → "1b", "ablation2" → "2")
+  - `sequence_id`: Extract timestamp portion from `video_file` in metadata using regex pattern `flood_video_\d{8}_(\d{6})\.mp4` (e.g., "flood_video_20251005_145739.mp4" → "145739"). This matches GT file naming `video_145739.jsonl`.
+  - `sensor_prediction`: Extract from `classification_result.scores.sensor_prediction` if present (values: "wet", "neutral", "dry"), otherwise default to "neutral"
   - `repeat_index`: Use `run_index_in_ablation` (0-based index of run within its ablation folder, sorted by timestamp)
-- `load_ground_truth(gt_dir: Path) -> Dict[str, Dict[int, int]]`: Load all JSONL files, return `{video_file: {timestamp_sec: label_int}}`
-- `load_frame_data(json_path: Path) -> Dict`: Parse single JSON file, extract all fields. Handle both string and dict formats for `classification_result`:
-  - If string: Convert to dict format with `prediction` mapped from string ("No Flood"→0, "Some Water"→1, "Flooded"→2)
-  - If dict: Extract all fields as-is
-- `match_frame_to_ground_truth(frame_data: Dict, gt: Dict, tolerance_sec: float = 0.5) -> Optional[int]`: Match frame to GT by video_file + video_timestamp_sec
+
+- `load_ground_truth(gt_dir: Path) -> Dict[str, Dict[int, int]]`: 
+  - Load all `.jsonl` files from `test_videos/labels/`
+  - Parse each file as a single JSON object (not line-by-line)
+  - Extract `video` field (full filename) and `labels` array
+  - Convert labels: `"flood"` → 2, `"sus"` → 1, `"no_flood"` → 0
+  - Return `{video_filename: {timestamp_int: label_int}}`
+
+- `load_frame_data(json_path: Path) -> Dict`: Parse single JSON file, extract all fields. Handle both formats for `classification_result`:
+  - **If string** (non-FSM): Convert to normalized format with `prediction` mapped from string ("No Flood"→0, "Some Water"→1, "Flooded"→2). Set FSM-specific fields to None/NaN.
+  - **If dict** (FSM): Extract all fields as-is including scores, counters, backend_info, timing
+
+- `match_frame_to_ground_truth(frame_data: Dict, gt: Dict) -> Optional[int]`: 
+  - Match frame to GT by `video_file` + `round(video_timestamp_sec)` to nearest integer second
+  - Lookup in GT dict using rounded timestamp
+  - Return GT label or None if no match
+
+**Config Type Detection:**
+
+- Configs 1, 1b: Non-FSM mode (classification_result is string)
+- Configs 2, 2b, 3, 3b, 4, 4b, 5, 6: FSM mode (classification_result is dict)
+- Add `config_type` column: "baseline" for non-FSM, "fsm" for FSM configs
 
 **Output:** Single long DataFrame with all frames from all runs, columns:
 
-- `run_id`, `ablation_name`, `sequence_id`, `sensor_variant`, `repeat_index`
-- `frame_index`, `video_file`, `video_timestamp_sec`
-- `gt_label`, `pred_label`
-- `image_score`, `sensor_boost`, `combined_score`, `sensor_prediction` (wet/neutral/dry - wet when sensor_boost > 0, dry when sensor_boost < 0, neutral when sensor_boost == 0)
-- `fsm_state`, `tier_used`, `tier_requested`, `motion`
-- `backend`, `skipped`, `conflict`, `drift`, `flapping`
-- All timing fields (end-to-end, per-stage)
-- `counters` (high, low, ambiguous, conflict, mid)
+- **Identifiers:** `run_id`, `ablation_name`, `sequence_id`, `sensor_prediction`, `repeat_index`, `config_type`
+- **Frame info:** `frame_index`, `video_file`, `video_timestamp_sec`, `video_timestamp_sec_rounded`
+- **Labels:** `gt_label`, `pred_label`
+- **Scores (FSM only, NaN for non-FSM):** `image_score`, `sensor_boost`, `combined_score`
+- **FSM state (FSM only):** `fsm_state`, `tier_used`, `tier_requested`
+- **Metadata:** `motion`, `resource_constrained`, `backend`
+- **Flags (FSM only):** `skipped`, `conflict`, `drift`, `flapping`, `model_switched`, `llm_used`, `s2_llm_confirmed`
+- **Counters (FSM only):** `counter_high`, `counter_low`, `counter_ambiguous`, `counter_conflict`, `counter_mid`
+- **Timing:** `total_pipeline_latency_s` (primary latency metric for all configs)
+- **Sensor data:** `temperature`, `humidity`, `pressure`, `temperature_baseline`, `humidity_baseline`, `pressure_baseline`
+- **Sensor anomalies (if present):** `delta_temperature`, `delta_humidity`, `delta_pressure`
 
 ### Stage 2: Energy Data Integration Module (`evaluation_analysis/energy_integration.py`)
 
+**Note:** This module is optional and will be implemented when energy data is available.
+
 **Functions:**
 
-- `discover_energy_files(energy_dir: Path, run_id: str) -> List[Path]`: Find energy JSON files for a run
-- `load_energy_data(energy_file: Path) -> pd.DataFrame`: Load energy JSON, handle flexible formats (timestamp-based or interval-based)
-- `match_energy_to_frames(energy_df: pd.DataFrame, frame_timestamps: pd.Series, run_start_ts: float) -> pd.DataFrame`: Align energy samples to frames (interpolate or aggregate)
-- `compute_per_frame_energy(energy_df: pd.DataFrame, frame_intervals: List[Tuple[float, float]]) -> pd.Series`: Compute energy per frame from power samples
+- `discover_energy_file(energy_dir: Path, run_id: str) -> Optional[Path]`: 
+  - Find energy file for a run by matching `run_id` in files from `storage/video_energy_results/`
+  - Search pattern: files containing `run_id` in filename or within JSON `run_id` field
+  - Return single file path or None if not found
 
-**Output:** Extended frame DataFrame with energy columns:
+- `load_energy_data(energy_file: Path) -> Dict`: 
+  - Load energy file as single JSON object (same structure as label files)
+  - Parse `measurements` array with `t` (timestamp), `energy_total_j` (cumulative energy), and `power_total_w` (instantaneous power)
+  - Return dict with `run_id`, `video_file`, and `measurements` array
 
-- `energy_pi_total`, `energy_jetson_total`, `energy_total`
-- `energy_pi_per_frame`, `energy_jetson_per_frame`, `energy_total_per_frame`
-- `power_pi_mean`, `power_jetson_mean` (if available)
+- `match_energy_to_frames(energy_data: Dict, frame_timestamps: pd.Series) -> pd.DataFrame`: 
+  - Match energy measurements to frames by timestamp
+  - For each frame, find energy and power values at frame start and frame end
+  - Extract energy at frame timestamp from cumulative energy values
+  - Extract power samples within frame interval for aggregation
+
+- `compute_per_frame_energy(energy_data: Dict, frame_df: pd.DataFrame) -> pd.DataFrame`: 
+  - Compute energy consumed per frame: `energy_at_frame_end - energy_at_frame_start`
+  - Compute mean/max power during frame interval from power samples
+  - Return DataFrame with `energy_total_per_frame`, `power_total_mean`, `power_total_max` for each frame
+
+**Output:** Extended frame DataFrame with energy columns (when available):
+
+- `energy_total_j`: Cumulative total system energy at frame timestamp (Joules)
+- `energy_total_per_frame`: Energy consumed during this frame (Joules)
+- `power_total_mean`: Mean power during frame interval (Watts)
+- `power_total_max`: Maximum power during frame interval (Watts)
+- `energy_total_run`: Total energy for entire run (Joules) - same value for all frames in run
 
 ### Stage 3: Per-Run Metrics Computation (`evaluation_analysis/compute_metrics.py`)
 
 **Functions:**
 
-- `compute_accuracy_metrics(frame_df: pd.DataFrame) -> Dict`: Confusion matrix, per-class precision/recall/F1, macro F1, F1 on ambiguous frames (combined_score in [0.3, 0.8])
-- `compute_latency_metrics(frame_df: pd.DataFrame) -> Dict`: p50/p90/p99/max end-to-end latency, stratified by motion and tier
-- `compute_energy_metrics(frame_df: pd.DataFrame) -> Dict`: Total energy, per-frame energy (mean/p50/p90), normalized by decision-bearing frames
-- `compute_stability_metrics(frame_df: pd.DataFrame) -> Dict`: Label oscillation count, FSM state usage fractions, tier usage fractions (by motion regime), S2/S3 episode durations, S5 entries
-- `compute_coverage_metrics(frame_df: pd.DataFrame) -> Dict`: Decision coverage by GT level (0/1/2), critical-frame coverage (GT ∈ {1,2}), correct coverage on critical frames
-- `compute_sensor_metrics(frame_df: pd.DataFrame) -> Dict`: Mean/std sensor_boost, correlation image_score vs sensor_boost, sensor-variant comparisons, sensor_prediction distribution (wet/neutral/dry counts and percentages), dry condition detection rate
+- `compute_accuracy_metrics(frame_df: pd.DataFrame) -> Dict`: 
+  - Confusion matrix (3x3 for classes 0, 1, 2)
+  - Per-class precision, recall, F1
+  - Macro F1 score
+  - For FSM configs: F1 on ambiguous frames (combined_score in [0.3, 0.8])
+
+- `compute_latency_metrics(frame_df: pd.DataFrame) -> Dict`: 
+  - Use `total_pipeline_latency_s` as the primary latency metric
+  - Compute p50, p90, p99, max, mean, std
+  - For FSM configs: stratify by motion and tier_used
+
+- `compute_energy_metrics(frame_df: pd.DataFrame) -> Dict`: (when energy data available)
+  - Total run energy (from last measurement)
+  - Per-frame energy (mean/p50/p90/std)
+  - Mean/max power during frames (mean/p50/p90)
+  - Energy per decision-bearing frame (frames where prediction was made)
+
+- `compute_stability_metrics(frame_df: pd.DataFrame) -> Dict`: (FSM configs only)
+  - Label oscillation count (consecutive prediction changes)
+  - FSM state usage fractions (time in S0, S1, S2, S3, S5)
+  - Tier usage fractions (nano, small, medium, large) by motion regime
+  - S2/S3 episode durations
+  - S5 entry count
+
+- `compute_coverage_metrics(frame_df: pd.DataFrame) -> Dict`: 
+  - Decision coverage by GT level (0/1/2)
+  - Critical-frame coverage (GT ∈ {1, 2})
+  - Correct coverage on critical frames
+
+- `compute_sensor_metrics(frame_df: pd.DataFrame) -> Dict`: (FSM configs only)
+  - Mean/std sensor_boost
+  - Correlation image_score vs sensor_boost
+  - sensor_prediction distribution (wet/neutral/dry counts and percentages)
+
+**Config-Aware Metrics:**
+
+- For non-FSM configs (1, 1b): Skip FSM-specific metrics (state usage, tier usage, counters, stability)
+- For FSM configs (2-6): Compute full metric suite
 
 **Output:** Per-run metrics DataFrame with one row per run_id, all computed metrics as columns.
 
@@ -89,20 +185,22 @@ Build a data extraction and metric computation pipeline that processes all ablat
 
 **Functions:**
 
-- `aggregate_by_group(metrics_df: pd.DataFrame, group_keys: List[str]) -> pd.DataFrame`: Group by (config, sequence, sensor_variant) or (config, sequence), compute mean ± std, 95% CI
-- `compute_hypothesis_comparisons(metrics_df: pd.DataFrame) -> pd.DataFrame`: Explicitly compute deltas for H1-H4 and ablation claims:
-  - H1: config 1 vs 4 (slow_creeping, Neutral)
-  - H2: Motion-aware metrics (config 4, Neutral, all sequences)
-  - H3: Consensus (4 vs 4b, 2 vs 2b, slow_creeping, Neutral)
-  - H4: Sensor variants (config 4, slow_creeping, all variants)
-  - Fast-motion safety: config 4 vs 5 (fast_passing, Neutral)
-  - Always-offload: config 4 vs 6 (slow_creeping, Neutral)
-  - Graceful degradation: config 4 vs 3 (slow_creeping, Neutral)
+- `aggregate_by_group(metrics_df: pd.DataFrame, group_keys: List[str]) -> pd.DataFrame`: 
+  - Group by (ablation_name, sequence_id) or (ablation_name, sequence_id, sensor_prediction)
+  - Compute mean ± std, 95% CI for each metric
+
+- `compute_hypothesis_comparisons(metrics_df: pd.DataFrame) -> pd.DataFrame`: Explicitly compute deltas for hypothesis testing:
+  - **H1 (Adaptive Tiering & Offload):** config 1 vs 4 - latency reduction, F1 maintained
+  - **H2 (Sensor Fusion Stability):** config 2 vs 4 - oscillation reduction, stability improvement
+  - **H3 (Multi-Model Consensus):** config 4 vs 4b, config 2 vs 2b - accuracy improvement vs energy cost
+  - **Fast-motion safety:** config 4 vs 5 - latency during fast motion
+  - **Always-offload baseline:** config 4 vs 6 - energy efficiency comparison
+  - **Graceful degradation:** config 4 vs 3 - local-only vs offload performance
 
 **Output:**
 
-- Aggregated metrics CSV: mean ± CI per (config, sequence, sensor_variant)
-- Hypothesis comparisons CSV: explicit deltas for each hypothesis
+- Aggregated metrics CSV: mean ± CI per (ablation_name, sequence_id)
+- Hypothesis comparisons CSV: explicit deltas for each hypothesis with statistical significance
 
 ### Stage 5: Data Export Module (`evaluation_analysis/export_data.py`)
 
@@ -113,16 +211,16 @@ Build a data extraction and metric computation pipeline that processes all ablat
 - `export_aggregated_data(agg_df: pd.DataFrame, output_dir: Path)`: Export aggregated metrics to CSV
 - `export_hypothesis_data(hyp_df: pd.DataFrame, output_dir: Path)`: Export hypothesis comparisons to CSV
 - `export_motion_stratified_data(frame_df: pd.DataFrame, output_dir: Path)`: Export motion-stratified summaries (tier usage, oscillations, latency) to CSV
-- `export_sensor_variant_data(frame_df: pd.DataFrame, output_dir: Path)`: Export sensor-variant comparison data to CSV
+- `export_sensor_prediction_data(frame_df: pd.DataFrame, output_dir: Path)`: Export sensor prediction distribution data to CSV
 
 **Output:** All data files in `evaluation_analysis/evaluation_results/`:
 
 - `frames_all.csv`: Complete per-frame data
 - `runs_metrics.csv`: Per-run aggregated metrics
-- `aggregated_by_config_sequence_sensor.csv`: Grouped means ± CI
+- `aggregated_by_config_sequence.csv`: Grouped means ± CI
 - `hypothesis_comparisons.csv`: Explicit hypothesis deltas
 - `motion_stratified_summary.csv`: Motion-regime breakdowns
-- `sensor_variant_comparison.csv`: Sensor variant analysis
+- `sensor_prediction_summary.csv`: Sensor prediction analysis
 
 ### Stage 6: Main Orchestration Script (`evaluation_analysis/evaluate_system.py`)
 
@@ -143,29 +241,63 @@ Build a data extraction and metric computation pipeline that processes all ablat
 python evaluate_system.py \
     --results-dir storage/video_results \
     --gt-dir test_videos/labels \
-    --energy-dir storage/energy_data \  # optional
+    --energy-dir storage/video_energy_results \  # optional
     --output-dir evaluation_analysis/evaluation_results
 ```
 
+**Progress Reporting:**
+
+- Log: "Processing run X/Y", "Loaded N frames", "Computed metrics for M runs"
+- Summary statistics at completion
+
 ## Key Design Decisions
 
-1. **Flexible Energy Integration**: Energy module handles multiple formats, matches by timestamp or run_id
-2. **Flexible Metadata Extraction**: Supports folder-based (ablationX) and metadata-field extraction, with fallback logic
-3. **Comprehensive Frame-Level Data**: Export full frame DataFrame for custom analysis
-4. **Explicit Hypothesis Computations**: Script explicitly computes all hypothesis deltas as specified
-5. **Data-Only Output**: No plots or reports, only structured data files (CSV/JSON)
-6. **Motion Stratification**: All metrics computed per motion regime where relevant
-7. **Coverage Metrics**: Explicit coverage calculations for system-level hazard prioritization claim
-8. **String Classification Result Handling**: Data ingestion handles both legacy string format ("No Flood") and modern dict format, normalizing to consistent structure
-9. **Multiple Runs Per Ablation**: Repeat indexing based on chronological ordering of run directories within each ablation folder
-10. **Sensor Prediction Tracking**: Sensor prediction (wet/neutral/dry) extracted from classification_result when available, computed from sensor_boost if missing. Wet when sensor_boost > 0, dry when sensor_boost < 0 (heatwave/dry spell), neutral when sensor_boost == 0
+1. **Ground Truth Matching:** Match frames to GT by rounding `video_timestamp_sec` to nearest integer second, then lookup in GT dict by video filename + rounded timestamp
+2. **Sequence ID Extraction:** Extract 6-digit timestamp from video filename pattern `flood_video_YYYYMMDD_HHMMSS.mp4` → `HHMMSS` to match GT file naming `video_HHMMSS.jsonl`
+3. **Ablation Name Handling:** Preserve variant suffix (1, 1b, 2, 2b, etc.) from folder names
+4. **Sensor Prediction:** Extract directly from `classification_result.scores.sensor_prediction` field (values: "wet", "neutral", "dry")
+5. **Primary Latency Metric:** Use `total_pipeline_latency_s` from timing for all configs (available in both FSM and non-FSM results)
+6. **Config-Aware Processing:** Detect FSM vs non-FSM configs based on classification_result type; skip FSM-specific metrics for non-FSM configs
+7. **String Classification Handling:** Convert string predictions ("No Flood", "Some Water", "Flooded") to integers (0, 1, 2) for non-FSM configs
+8. **Multiple Runs Per Ablation:** Repeat indexing based on chronological ordering of run directories within each ablation folder
+9. **Data-Only Output:** No plots or reports, only structured data files (CSV) for downstream analysis
+10. **Optional Energy Integration:** Energy module designed to be optional; analysis proceeds without energy data
+11. **Energy Data Format:** Total system energy format with cumulative energy (`energy_total_j`) and instantaneous power (`power_total_w`), matched by `run_id`, timestamps relative to run start
+
+## Ablation Configuration Reference
+
+| Ablation | Config Type | Models | FSM | Sensor Fusion | Remote Offload | Notes |
+
+|----------|-------------|--------|-----|---------------|----------------|-------|
+
+| 1        | baseline    | 1x medium | ❌ | ❌ | ❌ | Single-model baseline |
+
+| 1b       | baseline    | 3x medium | ❌ | ❌ | ❌ | Multi-model baseline |
+
+| 2        | fsm         | 3x nano | ✅ | ❌ | ✅ | Vision-only FSM |
+
+| 2b       | fsm         | 1x nano | ✅ | ❌ | ✅ | Single-model FSM |
+
+| 3        | fsm         | 3x nano | ✅ | ✅ | ❌ | Full system local |
+
+| 3b       | fsm         | 1x nano | ✅ | ✅ | ❌ | Single-model full local |
+
+| 4        | fsm         | 3x nano | ✅ | ✅ | ✅ | **Production system** |
+
+| 4b       | fsm         | 1x nano | ✅ | ✅ | ✅ | Single-model production |
+
+| 5        | fsm         | 3x nano | ✅ | ✅ | ✅ | Fast motion force Jetson |
+
+| 6        | fsm         | 1x medium | ✅* | ✅ | ✅ | Always-offload baseline |
+
+*Config 6 uses FSM mode but with FIXED_TIER override
 
 ## File Structure
 
 ```
 evaluation_analysis/
 ├── ingest_data.py          # Stage 1: Data loading
-├── energy_integration.py    # Stage 2: Energy data handling
+├── energy_integration.py    # Stage 2: Energy data handling (optional)
 ├── compute_metrics.py      # Stage 3: Metric computation
 ├── aggregate_results.py    # Stage 4: Aggregation & comparisons
 ├── export_data.py          # Stage 5: Data export
@@ -173,30 +305,40 @@ evaluation_analysis/
 └── evaluation_results/     # Output directory
     ├── frames_all.csv
     ├── runs_metrics.csv
-    ├── aggregated_by_config_sequence_sensor.csv
+    ├── aggregated_by_config_sequence.csv
     ├── hypothesis_comparisons.csv
     ├── motion_stratified_summary.csv
-    └── sensor_variant_comparison.csv
+    └── sensor_prediction_summary.csv
 ```
 
 ## Dependencies
 
 - pandas, numpy for data manipulation
-- scipy for confidence intervals
+- scipy for confidence intervals and statistical tests
 - pathlib for file handling
-- json for parsing
+- json, re for parsing
+
+## Data Validation & Error Handling
+
+- Skip malformed JSON files with warning logs
+- Handle missing fields gracefully (fill with NaN/None)
+- Report frames without ground truth matches (count per run)
+- Detect and warn about duplicate frames (same run_id + frame_index)
+- Check for incomplete runs (runs with very few frames)
+- Validate timestamp consistency
 
 ## Testing Strategy
 
 - Unit tests for each metric computation function
-- Integration test with sample data
+- Integration test with sample data from each ablation type
 - Validation that all expected columns are present in outputs
+- Cross-check GT matching accuracy
 
-### To-dos
+## To-dos
 
-- [ ] Implement data ingestion module: discover runs, load ground truth, parse frame JSONs, match to GT
-- [ ] Implement energy integration module: flexible format handling, timestamp matching, per-frame energy computation
-- [ ] Implement metrics computation module: accuracy, latency, energy, stability, coverage, sensor metrics
-- [ ] Implement aggregation module: group by config/sequence/sensor, compute means ± CI, explicit hypothesis comparisons
+- [ ] Implement data ingestion module: discover runs, load ground truth (JSONL format), parse frame JSONs, match to GT by rounded timestamp
+- [ ] Implement energy integration module: flexible format handling, timestamp matching, per-frame energy computation (optional)
+- [ ] Implement metrics computation module: accuracy, latency (using total_pipeline_latency_s), stability, coverage, sensor metrics with config-aware logic
+- [ ] Implement aggregation module: group by config/sequence, compute means ± CI, explicit hypothesis comparisons
 - [ ] Implement data export module: export all DataFrames to CSV with proper column naming
 - [ ] Implement main orchestration script with CLI interface, wire all modules together
