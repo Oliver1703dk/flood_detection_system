@@ -709,6 +709,7 @@ class FloodFSM:
         fsm_energy_metrics = {}
         classification_duration = 0.0
         classification_measure_duration = 0.0
+        sensor_prediction = "neutral"  # Default value
         energy_tracking_enabled = bool(getattr(config, "ENABLE_FSM_ENERGY_TRACKING", True))
         if get_energy_tracker is not None and energy_tracking_enabled:
             energy_tracker = get_energy_tracker()
@@ -724,6 +725,7 @@ class FloodFSM:
                 combined = scores.get("combined_score", 0.0)
                 image_score = scores.get("image_score", 0.0)
                 sensor_boost = scores.get("sensor_boost", 0.0)
+                sensor_prediction = scores.get("sensor_prediction", "neutral")
                 prediction = scores.get("final_prediction", 0)
 
                 conflict = self._detect_conflict(combined, image_score, sensor_boost)
@@ -751,6 +753,7 @@ class FloodFSM:
             combined = scores.get("combined_score", 0.0)
             image_score = scores.get("image_score", 0.0)
             sensor_boost = scores.get("sensor_boost", 0.0)
+            sensor_prediction = scores.get("sensor_prediction", "neutral")
             prediction = scores.get("final_prediction", 0)
 
             conflict = self._detect_conflict(combined, image_score, sensor_boost)
@@ -893,6 +896,7 @@ class FloodFSM:
                 "combined_score": combined,
                 "image_score": image_score,
                 "sensor_boost": sensor_boost,
+                "sensor_prediction": sensor_prediction,
             },
             counters=self._counters.copy(),
             llm_used=llm_used,
@@ -921,7 +925,7 @@ class FloodFSM:
             state=self.state,
             model_tier=self.model_manager.active_tier or ModelTier.NANO,
             prediction=0,
-            scores={"combined_score": 0.0, "image_score": 0.0, "sensor_boost": 0.0},
+            scores={"combined_score": 0.0, "image_score": 0.0, "sensor_boost": 0.0, "sensor_prediction": "neutral"},
             counters=self._counters.copy(),
             llm_used=False,
             llm_prediction=None,

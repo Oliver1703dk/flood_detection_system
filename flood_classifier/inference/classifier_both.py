@@ -15,7 +15,7 @@ class ClassifierBoth:
                  baseline_calculator=None, 
                  image_classifier=None,
                  disable_sensor_fusion=False,  # Disable sensor fusion for vision-only evaluation
-                 humidity_threshold=25,       # ΔRH threshold
+                 humidity_threshold=15,       # ΔRH threshold
                  temperature_threshold=-2.5,      # ΔT threshold (i.e. drop > 2°C)
                  pressure_threshold=-5,         # ΔP threshold (i.e. drop > 1 unit)
                  humidity_weight=0.1,           # Weight for humidity anomaly
@@ -70,7 +70,8 @@ class ClassifierBoth:
                 dt = anomalies.get("delta_temperature", 0)
                 dp = anomalies.get("delta_pressure", 0)
 
-                if dh > self.humidity_threshold:
+                # Humidity boost only if accompanied by cooling (flash-flood outflow signature)
+                if dh > self.humidity_threshold and dt < -1.5:
                     sensor_boost += self._graduated_weight(
                         dh, self.humidity_threshold, self.humidity_weight)
 
@@ -81,6 +82,9 @@ class ClassifierBoth:
                 if dp < self.pressure_threshold:
                     sensor_boost += self._graduated_weight(
                         dp, self.pressure_threshold, self.pressure_weight)
+                        
+                if dh < -20 and dt > +3.0:
+                    sensor_boost -= 0.08   # Prevents false flood calls during heatwaves/dry spells
 
             else:
                 print("Baseline not available; relying on image classifier only.")
@@ -105,11 +109,23 @@ class ClassifierBoth:
         else:
             final_prediction = 2  # Flooded
 
+        # Determine sensor prediction based on sensor_boost and anomalies
+        # sensor_boost > 0 indicates wet conditions (anomalies detected)
+        # sensor_boost == 0 indicates neutral conditions (no significant anomalies)
+        # sensor_boost < 0 indicates dry conditions (heatwave/dry spell detected)
+        if sensor_boost > 0:
+            sensor_prediction = "wet"
+        elif sensor_boost < 0:
+            sensor_prediction = "dry"
+        else:
+            sensor_prediction = "neutral"
+
         return {
             "final_prediction": final_prediction,
             "combined_score": combined_score,
             "image_score": image_score,
             "sensor_boost": sensor_boost,
+            "sensor_prediction": sensor_prediction,
             "anomalies": anomalies,
             "baseline": baseline
         }
