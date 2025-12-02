@@ -99,12 +99,15 @@ def load_ablation_results(results_dir: Path, ablation_name: str) -> List[Dict]:
     results = []
     
     # Check for new structure first: run folders directly under ablation
+    # New structure: storage/video_results/ablationX/run_<timestamp>/*.json
     run_dirs_new = [d for d in ablation_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
     
     if run_dirs_new:
         # New structure: ablation_name/run_<timestamp>/*.json
-        for run_dir in run_dirs_new:
-            for json_file in run_dir.glob("*.json"):
+        # Process all run folders (multiple runs can exist in the same ablation)
+        for run_dir in sorted(run_dirs_new):  # Sort for consistent processing order
+            json_files = list(run_dir.glob("*.json"))
+            for json_file in json_files:
                 try:
                     with open(json_file, 'r') as f:
                         data = json.load(f)
