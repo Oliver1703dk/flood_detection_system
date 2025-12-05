@@ -58,7 +58,7 @@ FSM_DEFAULTS = {
     "threshold_high": 0.4,
     "frames_high": 1,
     "frames_low": 1,
-    "frames_ambiguous": 2,
+    "frames_ambiguous": 1,
     "model_cooldown": 1,
     "flap_window": 8,
     "resource_skip_ratio": 3,
