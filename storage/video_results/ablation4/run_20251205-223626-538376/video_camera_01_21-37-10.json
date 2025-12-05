@@ -1,0 +1,121 @@
+{
+    "sensor_data": {
+        "temperature": 17.0,
+        "humidity": 78.0,
+        "pressure": 1016.0
+    },
+    "metadata": {
+        "timestamp": "2025-12-05T19:37:56.101905",
+        "location": "50.8503,4.3517",
+        "camera_id": "video_camera_01",
+        "motion": "slow",
+        "resource_constrained": false,
+        "collector_capture_ts": 1764959876.0675375,
+        "video_timestamp_sec": 8.0,
+        "video_file": "flood_video_20251005_145939.mp4",
+        "collector_publish_ts": 1764959876.1696334,
+        "run_id": "20251205-223626-538376",
+        "processor_queue_enter_ts": 1764970628.182002,
+        "processor_receive_ts": 1764970628.3897953,
+        "processor_queue_exit_ts": 1764970628.3897488,
+        "sensor_baseline": {
+            "temperature_baseline": 17.0,
+            "humidity_baseline": 78.0,
+            "pressure_baseline": 1016.0
+        },
+        "sensor_data": {
+            "temperature": 17.0,
+            "humidity": 78.0,
+            "pressure": 1016.0
+        },
+        "sensor_anomalies": {
+            "delta_temperature": 0.0,
+            "delta_humidity": 0.0,
+            "delta_pressure": 0.0
+        }
+    },
+    "classification_result": {
+        "frame_index": 3,
+        "state": "S0",
+        "model_tier": "nano",
+        "prediction": 0,
+        "scores": {
+            "combined_score": 0.0019425510609166275,
+            "image_score": 0.0019425510609166275,
+            "sensor_boost": 0,
+            "sensor_prediction": "neutral"
+        },
+        "counters": {
+            "high": 0,
+            "low": 4,
+            "ambiguous": 0,
+            "conflict": 0,
+            "mid": 0
+        },
+        "llm_used": false,
+        "llm_prediction": null,
+        "conflict": false,
+        "drift": false,
+        "flapping": false,
+        "skipped": false,
+        "model_switched": false,
+        "tier_requested": "nano",
+        "backend": "local",
+        "backend_info": {
+            "latency_s": 2.2589271040014864,
+            "started_at": "2025-12-05T21:37:08.419390",
+            "completed_at": "2025-12-05T21:37:10.678367",
+            "timing": {
+                "inference_s": 2.2589271040014864,
+                "inference_cold_start": 0.0
+            }
+        },
+        "llm_backend_info": {},
+        "s2_llm_confirmed": false,
+        "timing": {
+            "inference_s": 2.2589271040014864,
+            "backend_inference_s": 2.2589271040014864,
+            "backend_inference_cold_start": 0.0,
+            "fsm_baseline_lookup_s": 6.443999154726043e-06,
+            "fsm_state_transition_s": 4.400000034365803e-05,
+            "fsm_tier_selection_s": 1.6704001609468833e-05,
+            "fsm_infer_dispatch_s": 2.2820104459970025,
+            "fsm_classification_core_s": 0.0026663220014597755,
+            "fsm_state_evaluation_s": 7.055998139549047e-06,
+            "fsm_s2_enforce_s": 5.036999937146902e-06,
+            "fsm_total_s": 2.2853133069984324,
+            "classification_s": 0.0026663220014597755
+        }
+    },
+    "timing": {
+        "json_parse_s": 0.0007174649981607217,
+        "processor_queue_enter_ts": 1764970628.182002,
+        "collector_capture_ts": 1764959876.0675375,
+        "collector_capture_to_processor_receive_s": 10752.322257757187,
+        "collector_capture_to_queue_enter_s": 10752.114464521408,
+        "collector_publish_ts": 1764959876.1696334,
+        "collector_publish_to_processor_receive_s": 10752.220161914825,
+        "collector_publish_to_queue_enter_s": 10752.012368679047,
+        "process_start_ts": 1764970628.3897953,
+        "pipeline_latency_s": 2.292434549999598,
+        "queue_wait_s": 0.20774686299773748,
+        "processor_queue_exit_ts": 1764970628.3897488,
+        "validation_storage_s": 0.002586803002486704,
+        "inference_s": 2.2589271040014864,
+        "backend_inference_s": 2.2589271040014864,
+        "backend_inference_cold_start": 0.0,
+        "fsm_baseline_lookup_s": 6.443999154726043e-06,
+        "fsm_state_transition_s": 4.400000034365803e-05,
+        "fsm_tier_selection_s": 1.6704001609468833e-05,
+        "fsm_infer_dispatch_s": 2.2820104459970025,
+        "fsm_classification_core_s": 0.0026663220014597755,
+        "fsm_state_evaluation_s": 7.055998139549047e-06,
+        "fsm_s2_enforce_s": 5.036999937146902e-06,
+        "fsm_total_s": 2.2853133069984324,
+        "classification_s": 0.0026663220014597755,
+        "backend_latency_s": 2.2589271040014864,
+        "baseline_update_s": 1.962998794624582e-06,
+        "result_save_s": 0.0015924119979899842,
+        "total_pipeline_latency_s": 2.4962869940027304
+    }
+}
