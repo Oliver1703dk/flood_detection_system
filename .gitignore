@@ -1,8 +1,6 @@
 # LLM model
 jetson_worker/llm/models/
 
-yolov8_processor/model/
-
 # Storage folder
 storage/data/
 test_dataset/
