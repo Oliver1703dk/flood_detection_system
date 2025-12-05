@@ -287,7 +287,7 @@ def test_resource_constrained_uses_nano_for_non_s2_states():
     assert decision_s0.tier_requested == ModelTier.NANO
     
     # Test S1 -> S5: should use NANO
-    # Use ambiguous scores (between threshold_low 0.35 and threshold_high 0.65) to reach S1
+    # Use ambiguous scores (between threshold_low 0.12 and threshold_high 0.4) to reach S1
     classifier_s1 = DummyClassifier([
         {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},
         {"final_prediction": 1, "combined_score": 0.5, "image_score": 0.45, "sensor_boost": 0.05},

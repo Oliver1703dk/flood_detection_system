@@ -18,11 +18,11 @@ class ClassifierBoth:
                  humidity_threshold=15,       # ΔRH threshold
                  temperature_threshold=-2.5,      # ΔT threshold (i.e. drop > 2°C)
                  pressure_threshold=-5,         # ΔP threshold (i.e. drop > 1 unit)
-                 humidity_weight=0.1,           # Weight for humidity anomaly
-                 temperature_weight=0.05,       # Weight for temperature anomaly
-                 pressure_weight=0.03,          # Weight for pressure anomaly
-                 threshold_low=0.3,             # Combined score low threshold
-                 threshold_high=0.6):           # Combined score high threshold
+                 humidity_weight=0.08,           # Weight for humidity anomaly
+                 temperature_weight=0.04,       # Weight for temperature anomaly
+                 pressure_weight=0.02,          # Weight for pressure anomaly
+                 threshold_low=0.12,             # Combined score low threshold
+                 threshold_high=0.4):           # Combined score high threshold
         self.baseline_calculator = baseline_calculator or BaselineCalculator()
         self.image_classifier = image_classifier or EnhancedImageClassifier()
         self.disable_sensor_fusion = disable_sensor_fusion

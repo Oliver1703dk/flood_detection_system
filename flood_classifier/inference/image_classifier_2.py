@@ -77,7 +77,7 @@ class EnhancedImageClassifier:
             conf_multiplier = 1.0
             effective_agreement = model_agreement
             
-            agreement_boost = 1 + 0.1 * (effective_agreement - 1)  # +10% per extra agreeing model
+            agreement_boost = 1 + 0.2 * (effective_agreement - 1)  # +20% per extra agreeing model
             score = (conf * conf_multiplier) * area_ratio * agreement_boost * model_normalization
 
             scores.append(score)

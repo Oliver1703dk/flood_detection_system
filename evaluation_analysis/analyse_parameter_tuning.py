@@ -245,13 +245,17 @@ def compute_metrics(df: pd.DataFrame) -> Dict:
 def analyze_threshold_performance(df: pd.DataFrame, threshold_low: float, 
                                    threshold_high: float, verbose: bool = False,
                                    use_balanced_accuracy: bool = True,
-                                   class_weights: Optional[Dict[int, float]] = None) -> Dict:
+                                   class_weights: Optional[Dict[int, float]] = None,
+                                   merge_class_1_to_0: bool = False) -> Dict:
     """Analyze performance with specific thresholds.
     
     Args:
         class_weights: Optional dict mapping class label to weight.
                       If None, uses equal weights (balanced accuracy).
                       Example: {0: 1.0, 1: 0.0, 2: 1.0} to ignore class 1.
+        merge_class_1_to_0: If True, treat class 1 (sus/watch) as class 0 (no flood)
+                           for accuracy computation. This matches final evaluation where
+                           class 1 is merged with class 0.
     """
     if 'combined_score' not in df.columns or df['combined_score'].isna().all():
         return {}
@@ -261,6 +265,11 @@ def analyze_threshold_performance(df: pd.DataFrame, threshold_low: float,
     df_copy['pred_thresh'] = 0
     df_copy.loc[df_copy['combined_score'] >= threshold_low, 'pred_thresh'] = 1
     df_copy.loc[df_copy['combined_score'] >= threshold_high, 'pred_thresh'] = 2
+    
+    # Merge class 1 to class 0 if requested (matches final evaluation)
+    if merge_class_1_to_0:
+        df_copy['ground_truth'] = df_copy['ground_truth'].replace(1, 0)
+        df_copy['pred_thresh'] = df_copy['pred_thresh'].replace(1, 0)
     
     # Compute accuracy
     correct = (df_copy['pred_thresh'] == df_copy['ground_truth']).sum()
@@ -333,6 +342,8 @@ def analyze_threshold_performance(df: pd.DataFrame, threshold_low: float,
     
     if verbose:
         print(f"  Thresholds: low={threshold_low:.3f}, high={threshold_high:.3f}")
+        if merge_class_1_to_0:
+            print(f"  Evaluation mode: Class 1 (sus/watch) merged with class 0 (no flood)")
         print(f"  Overall accuracy: {accuracy:.4f} ({correct}/{len(df_copy)})")
         if 'weighted_accuracy' in metrics:
             print(f"  Weighted accuracy: {metrics['weighted_accuracy']:.4f}")
@@ -356,7 +367,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
                             debug: bool = False,
                             min_threshold_gap: float = 0.2,
                             use_balanced_accuracy: bool = True,
-                            class_weights: Optional[Dict[int, float]] = None) -> Dict:
+                            class_weights: Optional[Dict[int, float]] = None,
+                            merge_class_1_to_0: bool = False) -> Dict:
     """
     Grid search for optimal thresholds with distribution-aware initialization.
     
@@ -370,6 +382,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
         class_weights: Optional dict mapping class label to weight.
                       If provided, uses weighted accuracy instead of balanced.
                       Example: {0: 1.0, 1: 0.0, 2: 1.0} to optimize for classes 0 and 2 only.
+        merge_class_1_to_0: If True, treat class 1 (sus/watch) as class 0 (no flood)
+                           for accuracy computation. This matches final evaluation.
     """
     if 'combined_score' not in df.columns or df['combined_score'].isna().all():
         return {}
@@ -506,6 +520,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
         print(f"  High threshold: [{search_high_min:.3f}, {search_high_max:.3f}]")
         print(f"  Step size: {step}")
         print(f"  Minimum threshold gap: {min_threshold_gap:.3f}")
+        if merge_class_1_to_0:
+            print(f"  Merging class 1 (sus/watch) with class 0 (no flood) for evaluation")
         if class_weights is not None:
             print(f"  Using weighted accuracy with weights: {class_weights}")
         else:
@@ -528,7 +544,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
             iterations += 1
             metrics = analyze_threshold_performance(valid_df, thresh_low, thresh_high,
                                                     use_balanced_accuracy=use_balanced_accuracy,
-                                                    class_weights=class_weights)
+                                                    class_weights=class_weights,
+                                                    merge_class_1_to_0=merge_class_1_to_0)
             # Use weighted accuracy, balanced accuracy, or overall accuracy based on flags
             score = metrics.get('score', metrics.get('accuracy', 0))
             
@@ -561,7 +578,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
                 analyze_threshold_performance(valid_df, best_thresholds[0], 
                                             best_thresholds[1], verbose=True,
                                             use_balanced_accuracy=use_balanced_accuracy,
-                                            class_weights=class_weights)
+                                            class_weights=class_weights,
+                                            merge_class_1_to_0=merge_class_1_to_0)
     
     # Fine-tune around best result if we found one
     if best_thresholds and step >= 0.05:
@@ -581,7 +599,8 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
                                          min(fine_high_max, max_score + fine_step), fine_step):
                 metrics = analyze_threshold_performance(valid_df, thresh_low, thresh_high,
                                                         use_balanced_accuracy=use_balanced_accuracy,
-                                                        class_weights=class_weights)
+                                                        class_weights=class_weights,
+                                                        merge_class_1_to_0=merge_class_1_to_0)
                 score = metrics.get('score', metrics.get('accuracy', 0))
                 
                 if score > best_accuracy:
@@ -603,17 +622,18 @@ def find_optimal_thresholds(df: pd.DataFrame, step: float = 0.05,
     
     if best_thresholds:
         # Get current performance for comparison
-        current_metrics = analyze_threshold_performance(valid_df, 0.35, 0.65, 
+        current_metrics = analyze_threshold_performance(valid_df, 0.12, 0.4, 
                                                        use_balanced_accuracy=use_balanced_accuracy,
-                                                       class_weights=class_weights)
+                                                       class_weights=class_weights,
+                                                       merge_class_1_to_0=merge_class_1_to_0)
         
         result = {
             'optimal_threshold_low': best_thresholds[0],
             'optimal_threshold_high': best_thresholds[1],
             # Store both overall and balanced/weighted accuracy
             'optimal_accuracy': best_metrics.get('accuracy', best_accuracy) if best_metrics else best_accuracy,
-            'current_threshold_low': 0.35,  # From config
-            'current_threshold_high': 0.65,  # From config
+            'current_threshold_low': 0.3,  # From config
+            'current_threshold_high': 0.5,  # From config
             'current_accuracy': current_metrics.get('accuracy', 0),
         }
         
@@ -771,18 +791,19 @@ def main():
                 print(f"\nOptimizing thresholds using {ablation4_key} (full production system)...")
                 print(f"Using {len(ablation4_valid)} samples from {ablation4_key}")
                 
-                # Optimize for classes 0 and 2 only (ignore class 1)
-                class_weights = {0: 1.0, 1: 0.0, 2: 1.0}
-                print(f"Using weighted accuracy: class 0 weight={class_weights[0]}, "
-                      f"class 1 weight={class_weights[1]}, class 2 weight={class_weights[2]}")
+                # Optimize for binary classification: merge class 1 (sus/watch) with class 0 (no flood)
+                # This matches the final evaluation where class 1 is treated as class 0
+                print(f"Evaluation mode: Merging class 1 (sus/watch) with class 0 (no flood)")
+                print(f"This matches final evaluation where sus and no_flood are both treated as no flood")
                 
                 # Use improved optimization with debugging enabled
-                # Use weighted accuracy and enforce minimum threshold gap
+                # Merge class 1 to 0 and optimize for overall accuracy (binary: no flood vs flood)
                 optimal = find_optimal_thresholds(ablation4_valid, step=0.05, 
                                                   use_distribution_aware=True, debug=True,
                                                   min_threshold_gap=0.2,
-                                                  use_balanced_accuracy=False,  # Use weighted instead
-                                                  class_weights=class_weights)
+                                                  use_balanced_accuracy=False,  # Use overall accuracy
+                                                  class_weights=None,  # Don't use weighted accuracy
+                                                  merge_class_1_to_0=True)  # Merge class 1 to 0
                 ablation4_optimal = optimal  # Save before it gets overwritten in the per-ablation loop
                 if optimal:
                     print(f"\n" + "="*60)
@@ -792,24 +813,11 @@ def main():
                     print(f"    Low:  {optimal['optimal_threshold_low']:.3f} (current: {optimal['current_threshold_low']:.3f})")
                     print(f"    High: {optimal['optimal_threshold_high']:.3f} (current: {optimal['current_threshold_high']:.3f})")
                     
-                    print(f"\n  Overall Accuracy:")
+                    print(f"\n  Binary Classification Accuracy (class 1 merged with class 0):")
                     print(f"    Current: {optimal['current_accuracy']:.4f}")
                     print(f"    Optimal: {optimal['optimal_accuracy']:.4f}")
                     print(f"    Improvement: {optimal['optimal_accuracy'] - optimal['current_accuracy']:.4f}")
-                    
-                    # Print weighted accuracy (what's being optimized)
-                    if 'optimal_weighted_accuracy' in optimal:
-                        print(f"\n  Weighted Accuracy (optimization target, classes 0+2 only):")
-                        print(f"    Current: {optimal.get('current_weighted_accuracy', 0):.4f}")
-                        print(f"    Optimal: {optimal['optimal_weighted_accuracy']:.4f}")
-                        print(f"    Improvement: {optimal['optimal_weighted_accuracy'] - optimal.get('current_weighted_accuracy', 0):.4f}")
-                    
-                    # Print classes 0+2 accuracy if available
-                    if 'optimal_class_0_2_accuracy' in optimal:
-                        print(f"\n  Classes 0+2 Accuracy (ignoring class 1):")
-                        print(f"    Current: {optimal.get('current_class_0_2_accuracy', 0):.4f}")
-                        print(f"    Optimal: {optimal['optimal_class_0_2_accuracy']:.4f}")
-                        print(f"    Improvement: {optimal['optimal_class_0_2_accuracy'] - optimal.get('current_class_0_2_accuracy', 0):.4f}")
+                    print(f"    Note: Class 1 (sus/watch) is treated as class 0 (no flood) to match final evaluation")
                     
                     # Print per-class accuracies if available
                     if 'class_0_accuracy' in optimal:

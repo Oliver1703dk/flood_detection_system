@@ -115,16 +115,16 @@ class FSMParams:
     """Configuration knobs controlling thresholds, counters and resources."""
 
     threshold_low: float = field(
-        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_low", 0.35)
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_low", 0.12)
     )
     threshold_high: float = field(
-        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_high", 0.65)
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("threshold_high", 0.4)
     )
     frames_high: int = field(
-        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_high", 3)
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_high", 1)
     )  # M consecutive high frames required for flood
     frames_low: int = field(
-        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_low", 3)
+        default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_low", 1)
     )  # N consecutive low frames required to clear flood
     frames_ambiguous: int = field(
         default_factory=lambda: getattr(config, "FSM_DEFAULTS", {}).get("frames_ambiguous", 3)

@@ -22,12 +22,12 @@ The Processing Pi consumes the Gathering Pi stream, normalizes inputs, drives th
 - **State Orchestration (Finite-State Machine)**:
   - *State Set*: S0 – normal watch with YOLO-n; S1 – uncertainty investigation with a tier bump and optional single LLM check when enabled; S2 – confirmed flood that mandates one LLM confirmation on first entry (when enabled) and may request follow-ups for slow scenes; S3 – ambiguity/conflict resolution that escalates to higher-accuracy tiers; S5 – resource-constrained override that degrades tiers and suspends LLMs.
   - *Process Flow*: 1) baseline retrieval; 2) motion and resource assessment; 3) tier selection; 4) routing choice (local vs remote); 5) inference execution; 6) scoring fusion; 7) conflict tracking and, when `USE_LLM_CONFIRMATION` is true, LLM trigger for ambiguous frames or initial S2 entry; 8) state transition update; 9) decision output for downstream consumers.
-  - *Hysteresis & Counters*: thresholds at 0.35/0.65 with high/low/ambiguous counters (M/N/K) to prevent flapping; S5 retains the previous state as an anchor and exits once resources recover.
+  - *Hysteresis & Counters*: thresholds at 0.12/0.4 with high/low/ambiguous counters (M/N/K) to prevent flapping; S5 retains the previous state as an anchor and exits once resources recover.
 - **YOLO Inference Flow**:
   1. Preprocessing: decode the base64 image, resize to the configured `IMAGE_SIZE`, and normalize channels.
   2. Multi-model inference: execute the configured checkpoints for the selected tier, using cached models when available.
   3. Aggregation: merge detections across checkpoints, propagate model provenance, and align detections with sensor context.
-     - Raw YOLO boxes below `0.03` confidence are dropped immediately so only credible detections participate in fusion.
+     - Raw YOLO boxes below `0.015` confidence are dropped immediately so only credible detections participate in fusion.
      - The remaining boxes are flattened across models and grouped when their IoU is ≥ 0.5; each group collapses into a single consensus box using a confidence-weighted average in `xywh` space.
      - Aggregated boxes retain the summed confidence (used as the vote strength) and the contributing model identifiers, exposing agreement counts that later stages surface as `M=<count>` overlays and as part of the scoring consensus bonus.
      - The fused output mirrors the standard YOLO schema, allowing the FSM, storage layer, and Jetson worker to consume a unified format while still benefiting from multi-model redundancy and provenance tracking.

@@ -20,7 +20,7 @@ class AggregatedResult:
         self.boxes = boxes  # List of AggregatedBox instances
 
 class YOLOv8FinalClassifier:
-    def __init__(self, confidence_threshold=0.03, iou_threshold=0.5):
+    def __init__(self, confidence_threshold=0.015, iou_threshold=0.5):
         """
         :param confidence_threshold: Minimum confidence required for a detection to be considered.
         :param iou_threshold: IoU threshold used to group overlapping detections.

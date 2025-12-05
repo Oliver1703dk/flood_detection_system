@@ -67,10 +67,10 @@ DEFAULT_BASELINE = {
 
 # Default FSM parameters for latency-aware scheduling
 FSM_DEFAULTS = {
-    "threshold_low": 0.3,
-    "threshold_high": 0.5,
-    "frames_high": 2,
-    "frames_low": 2,
+    "threshold_low": 0.12,
+    "threshold_high": 0.4,
+    "frames_high": 1,
+    "frames_low": 1,
     "frames_ambiguous": 2,
     "model_cooldown": 1,
     "flap_window": 8,
