@@ -6,7 +6,6 @@ import os
 import json
 import base64
 import time
-from sqlite3.dbapi2 import Timestamp
 import threading
 from typing import Optional, Tuple
 import cv2
@@ -127,7 +126,6 @@ def process_message(message_payload, image_name=None, queue_wait_s: float = 0.0,
         
         # Add run_id to metadata if available from config
         if 'run_id' not in metadata:
-            import config
             run_id = getattr(config, 'RUN_ID', None)
             if run_id:
                 metadata["run_id"] = run_id
@@ -498,6 +496,40 @@ def main():
     Initializes the MQTT receiver and directs each incoming message payload
     to the process_message callback for processing.
     """
+    print("=" * 60)
+    print("FLOOD DETECTION SYSTEM - Production Mode")
+    print("=" * 60)
+    
+    # Generate a unique run ID for this session
+    run_id = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    config.RUN_ID = run_id
+    
+    print(f"📁 Run ID: {run_id}")
+    print(f"📋 Config settings:")
+    print(f"   - CLASSIFICATION_MODE: {getattr(config, 'CLASSIFICATION_MODE', 'unknown')}")
+    print(f"   - model_size: {getattr(config, 'model_size', 'unknown')}, model_number: {getattr(config, 'model_number', 'unknown')}")
+    print(f"   - MQTT_BROKER_URL: {getattr(config, 'MQTT_BROKER_URL', 'unknown')}")
+    print(f"   - INFERENCE_ROUTING: {getattr(config, 'INFERENCE_ROUTING', {})}")
+    print(f"   - ENABLE_BASELINE_UPDATES: {getattr(config, 'ENABLE_BASELINE_UPDATES', True)}")
+    print("=" * 60)
+    
+    # Create run-specific storage directories
+    run_image_detections = Path(f"storage/image-detections/production/run_{run_id}")
+    run_video_results = Path(f"storage/video_results/production/run_{run_id}")
+    
+    # Update config paths for this run
+    config.DETECTION_OUTPUT_DIR = run_image_detections
+    config.RESULTS_VIDEO_STORAGE_DIR = str(run_video_results)
+    
+    # Create directories
+    run_image_detections.mkdir(parents=True, exist_ok=True)
+    run_video_results.mkdir(parents=True, exist_ok=True)
+    
+    print(f"📂 Storage directories created:")
+    print(f"   - Image detections: {run_image_detections}")
+    print(f"   - Video results: {run_video_results}")
+    print("=" * 60)
+    
     # Initialize strategy at startup (triggers pre-warming for FSM mode)
     initialize_strategy()
     
@@ -576,10 +608,11 @@ def main():
                     pass
             
             try:
+                now = datetime.now()
                 config.IMAGE_NAME = (
                     "MQTT_Image"
-                    + str(Timestamp.now().date())
-                    + str(Timestamp.now().time())
+                    + str(now.date())
+                    + str(now.time())
                 )
             except Exception:
                 config.IMAGE_NAME = "MQTT_Image"
