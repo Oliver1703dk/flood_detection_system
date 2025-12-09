@@ -1,17 +1,24 @@
 # Flood Detection System
 
-This repository contains an end-to-end prototype for detecting flood conditions by combining computer vision with sensor data. The code is organized into several modules that handle data ingestion, preprocessing, model inference and result storage.
+This repository contains an end-to-end prototype for detecting flood conditions by combining computer vision with sensor data. The system implements a Finite State Machine (FSM) for adaptive model selection, sensor fusion with diurnal baselines, and distributed inference across Raspberry Pi and NVIDIA Jetson devices.
 
 ## Project Structure
 
 ```
 cluster_data_receiver/   # MQTT receiver, validation and storage helpers
-flood_classifier/        # Sensor and image-based flood classifiers
+flood_classifier/        # FSM-based flood classifiers with sensor fusion
+yolov8_processor/        # YOLOv8 inference pipeline and model management
+jetson_worker/           # Distributed inference worker for Jetson
+evaluation_analysis/     # Experiment analysis and metrics computation
+tests/                   # Unit, integration and FSM tests
 main.py                  # Quick test with simulated inputs
 main_test.py             # Loop over the test dataset
-main_final.py            # Final program for MQTT-based operation
-storage/                 # Saved data and baselines
-test_dataset/            # Small sample dataset
+main_final.py            # Production MQTT-based operation
+main_ablation*.py        # Ablation study entry points (10 configurations)
+config.py                # Main configuration file
+config_ablation*.py      # Ablation-specific configurations
+storage/                 # Saved data, results and baselines
+test_dataset/            # Sample evaluation dataset
 ```
 
 ## Installation
@@ -22,66 +29,90 @@ Install Python dependencies from `requirements.txt`:
 pip install -r requirements.txt
 ```
 
-The models used by the YOLOv8 and classifier components should be placed in the directories referenced in `config.py`.
+The YOLO models should be placed in `yolov8_processor/model/<tier>/` directories where tier is one of: `nano`, `small`, `medium`, `large`.
 
 ## Running the System
 
 ### 1. Quick Test (`main.py`)
-`main.py` demonstrates the full pipeline on a single simulated message. The script creates a test image and sensor packet, processes it through the detection models and prints the prediction. Use this to verify that the pipeline is working end to end.
+Demonstrates the full pipeline on a single simulated message:
 
 ```bash
 python main.py
 ```
 
 ### 2. Dataset Evaluation (`main_test.py`)
-`main_test.py` iterates over the files inside `test_dataset/`. Each sample contains an image and a JSON label with synthetic sensor readings. The script validates the data, runs YOLOv8, classifies the flood level and prints the accuracy across the dataset.
+Iterates over the files inside `test_dataset/`:
 
 ```bash
 python main_test.py
 ```
 
 ### 3. Real-Time Operation (`main_final.py`)
-`main_final.py` is intended for deployment. It starts an `MQTTReceiver` that waits for messages on the topic configured in `config.py`. When a message arrives, `process_message` runs the complete pipeline – validation, storage, model inference and result saving.
+Production deployment with MQTT receiver:
 
 ```bash
 python main_final.py
 ```
 
-The program will keep running until interrupted, printing the prediction for each received message.
+### 4. Ablation Studies
+Run specific ablation configurations:
+
+```bash
+python main_ablation1.py   # Single-model baseline
+python main_ablation4.py   # Full production system
+# See ABLATION_STUDY_GUIDE.md for complete list
+```
 
 ## Configuration
 
-All tunable settings such as image size, classification mode and MQTT broker details are defined in `config.py`. Adjust these values to match your hardware setup and network environment.
+All settings are defined in `config.py`. Key options:
+
+- `CLASSIFICATION_MODE`: `"fsm"` (default), `"yolo_sensor"`, or `"llm_only"`
+- `IMAGE_SIZE`: Inference resolution (default: `(640, 640)`)
+- `MQTT_BROKER_URL`: MQTT broker address
+- `INFERENCE_ROUTING`: FSM state to backend mapping
+- `LOCAL_YOLO_TIER`: Platform-specific (nano on Pi, small on Jetson)
 
 ### Distributed Inference (Pi ↔ Jetson)
 
-The Pi can now offload heavy computer vision or LLM inference tasks to a Jetson over MQTT. The Jetson also hosts the MQTT broker (typically Mosquitto), so both Pis set `MQTT_BROKER_URL` to the Jetson's IP or hostname. Key settings live near the bottom of `config.py`:
+The system supports offloading inference to a Jetson over MQTT. The Jetson hosts the MQTT broker (typically Mosquitto), so both Pis set `MQTT_BROKER_URL` to the Jetson's IP or hostname. Key settings:
 
 - `INFERENCE_ROUTING` controls which FSM states run locally (`S0`, `S5`) and which trigger remote execution (default for `S1`–`S3`).
-- `LOCAL_YOLO_TIER` defines the heaviest YOLO model tier that remains on the Pi (`"nano"` by default). Larger tiers automatically route to the Jetson even if the FSM state is local.
+- `LOCAL_YOLO_TIER` determines the heaviest YOLO model tier kept on the Pi. Larger tiers automatically route to the Jetson.
 - `MQTT_INFERENCE_*` settings specify request/response topics, QoS and timeouts for the synchronous MQTT exchange.
 
-The Jetson should run a small worker service that subscribes to `inference/request`, performs the requested task (YOLO or LLM) and publishes the result on `inference/response/<job-id>`. See the “Jetson Worker Outline” section below for implementation guidance.
+## Jetson Worker
 
-## Test Dataset
+The `jetson_worker/worker.py` implements a MQTT-based inference service that:
 
-A miniature dataset is included in the `test_dataset/` folder for quick experimentation. The README inside describes how the images and sensor values were generated and provides a baseline sensor profile used for the synthetic samples.
+1. Subscribes to `inference/request` and publishes results to `inference/response/<job-id>` using QoS 1.
+2. Accepts JSON payloads with fields `{ "task": "yolo" | "llm", "tier": "small", "image_b64": "...", "metadata": {...} }`.
+3. For `task == "yolo"`, loads all available YOLOv8 models for the requested tier, runs inference on each, aggregates the results, and returns `{"detections": [...], "id": <job-id>}`.
+4. For `task == "llm"`, invokes the configured local VLM, returning `{ "prediction": 0|1|2, "id": <job-id> }`.
+5. Publishes heartbeat messages on `inference/jetson/status` every few seconds so the Pi can detect availability.
+6. Logs request IDs, processing time and any errors; on failure, returns `{ "error": "message", "id": <job-id> }` so the Pi can fall back gracefully.
+
+Run the worker on Jetson:
+
+```bash
+python jetson_worker/worker.py
+```
 
 ## Output
 
-Processed data and prediction results are stored under the `storage/` directory. Sensor baselines used by the classifiers are also kept here in `storage/sensor_baselines.json`.
+Results are stored under `storage/`:
+- `storage/data/` — Raw validated payloads
+- `storage/data_results/` — Classification results with timing metadata
+- `storage/sensor_baselines.json` — Computed diurnal sensor baselines
 
----
+## Test Dataset
 
-This project is a work in progress aimed at exploring multimodal flood detection. Contributions and issue reports are welcome.
+A miniature dataset is included in `test_dataset/` for quick experimentation. The README inside describes how the images and sensor values were generated.
 
-## Jetson Worker Outline
+## Documentation
 
-The Jetson service should be a lightweight Python process that:
-
-1. Runs (or connects locally to) the Jetson-hosted MQTT broker and subscribes to `inference/request`, publishing to `inference/response/<job-id>` using QoS 1.
-2. Accepts JSON payloads with fields `{ "task": "yolo" | "llm", "tier": "small", "image_b64": "...", "metadata": {...} }`.
-3. For `task == "yolo"`, loads all available YOLOv8 models for the requested tier (TensorRT preferable), runs inference on each, aggregates the results using the same logic as the Pi, and returns `{"detections": [...], "id": <job-id>}` with the same detection schema produced by `ResultFormatter`.
-4. For `task == "llm"`, invokes the configured LLM or vision model, returning `{ "prediction": 0|1|2, "id": <job-id> }`.
-5. Publishes heartbeat messages on `inference/jetson/status` every few seconds so the Pi can detect availability.
-6. Logs request IDs, processing time and any errors; on failure, return `{ "error": "message", "id": <job-id> }` so the Pi can fall back gracefully.
+- `ABLATION_STUDY_GUIDE.md` — Comprehensive ablation study guide (10 configurations)
+- `system_overview.md` — Detailed architecture documentation
+- `setup_guide.md` — Hardware setup instructions
+- `PLATFORM_CONFIG_GUIDE.md` — Platform-specific configuration
+- `evaluation_protocol.md` — Evaluation methodology
